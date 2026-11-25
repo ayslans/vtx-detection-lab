@@ -1,0 +1,28 @@
+services:
+  validate:
+    build: .
+    profiles: ["validate"]
+    volumes:
+      - ./rules:/app/rules:ro
+    command: ["validate"]
+
+  replay:
+    build: .
+    profiles: ["replay"]
+    volumes:
+      - ./rules:/app/rules:ro
+      - ./telemetry:/app/telemetry:ro
+      - ./docs/evidence:/app/docs/evidence
+    command:
+      [
+        "replay",
+        "--telemetry", "telemetry/fixtures/atomic_replay_events.json",
+        "--output", "docs/evidence/atomic_replay_report.md",
+        "--strict"
+      ]
+
+  test:
+    build: .
+    profiles: ["test"]
+    entrypoint: ["pytest"]
+    command: ["-v"]

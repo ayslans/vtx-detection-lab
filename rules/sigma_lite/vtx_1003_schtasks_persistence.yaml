@@ -1,0 +1,23 @@
+rule_id: VTX-1003
+title: Suspicious Scheduled Task Creation
+description: Detecta criação de tarefas agendadas via schtasks.exe, vetor comum de persistência e movimentação lateral.
+severity: HIGH
+log_source: sysmon
+mitre_tactic: Persistence
+mitre_technique: T1053.005
+pci_dss_refs:
+  - Req. 10.2.1
+  - Req. 10.2.2
+nist_csf_refs:
+  - DE.CM-09
+conditions:
+  - field: EventID
+    equals: "1"
+  - field: Image
+    contains_any:
+      - schtasks.exe
+  - field: CommandLine
+    contains_any:
+      - "/create"
+      - "-create"
+false_positive_notes: Instaladores legítimos e tarefas de backup/rotina criam scheduled tasks; correlacionar com usuário executor e caminho do binário alvo.

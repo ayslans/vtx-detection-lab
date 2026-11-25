@@ -1,0 +1,26 @@
+rule_id: VTX-1002
+title: Suspicious LSASS Memory Access
+description: Detecta processos acessando a memória do lsass.exe com máscaras de permissão típicas de credential dumping (Mimikatz, comsvcs.dll, ProcDump).
+severity: CRITICAL
+log_source: sysmon
+mitre_tactic: Credential Access
+mitre_technique: T1003.001
+pci_dss_refs:
+  - Req. 8.3
+  - Req. 10.2.1
+nist_csf_refs:
+  - DE.CM-09
+  - DE.AE-03
+conditions:
+  - field: EventID
+    equals: "10"
+  - field: TargetImage
+    contains_any:
+      - "\\lsass.exe"
+  - field: GrantedAccess
+    contains_any:
+      - "0x1010"
+      - "0x1410"
+      - "0x1fffff"
+      - "0x1038"
+false_positive_notes: Agentes de EDR, antivírus e ferramentas de monitoramento corporativo podem abrir handles no lsass.exe; aplicar allowlist por SourceImage assinado.

@@ -1,0 +1,131 @@
+[
+  {
+    "event_id": "EVT-001",
+    "timestamp": "2026-11-25T10:01:12Z",
+    "host": "FIN-WKSTN-01",
+    "log_source": "sysmon",
+    "expected_rule_id": "VTX-1001",
+    "payload": {
+      "EventID": 1,
+      "Image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      "CommandLine": "powershell.exe -NoP -NonI -W Hidden -EncodedCommand VwByAGkAdABlAC0ASABvAHMAdAAgACcAQQB0AG8AbQBpAGMAJwA=",
+      "User": "CORP\\j.silva",
+      "ParentImage": "C:\\Windows\\System32\\cmd.exe"
+    }
+  },
+  {
+    "event_id": "EVT-002",
+    "timestamp": "2026-11-25T10:03:45Z",
+    "host": "FIN-WKSTN-02",
+    "log_source": "sysmon",
+    "expected_rule_id": "VTX-1001",
+    "payload": {
+      "EventID": "1",
+      "Image": "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+      "CommandLine": "pwsh.exe -c \"[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('ZWNobyB0ZXN0'))\"",
+      "User": "CORP\\m.souza"
+    }
+  },
+  {
+    "event_id": "EVT-003",
+    "timestamp": "2026-11-25T10:08:20Z",
+    "host": "CDE-APP-WIN-01",
+    "log_source": "sysmon",
+    "expected_rule_id": "VTX-1002",
+    "payload": {
+      "EventID": 10,
+      "SourceImage": "C:\\Users\\Public\\procdump64.exe",
+      "TargetImage": "C:\\Windows\\System32\\lsass.exe",
+      "GrantedAccess": "0x1010",
+      "CallTrace": "C:\\Windows\\SYSTEM32\\ntdll.dll+9d4e4"
+    }
+  },
+  {
+    "event_id": "EVT-004",
+    "timestamp": "2026-11-25T10:12:04Z",
+    "host": "CDE-APP-WIN-01",
+    "log_source": "sysmon",
+    "expected_rule_id": "VTX-1003",
+    "payload": {
+      "EventID": 1,
+      "Image": "C:\\Windows\\System32\\schtasks.exe",
+      "CommandLine": "schtasks.exe /create /tn \"SyncAgentUpdate\" /tr \"C:\\ProgramData\\sync.exe\" /sc onlogon /ru SYSTEM",
+      "User": "NT AUTHORITY\\SYSTEM"
+    }
+  },
+  {
+    "event_id": "EVT-005",
+    "timestamp": "2026-11-25T10:15:31Z",
+    "host": "PAY-LNX-GW-01",
+    "log_source": "linux_auth",
+    "expected_rule_id": "VTX-1004",
+    "payload": {
+      "service": "sshd",
+      "src_ip": "203.0.113.45",
+      "message": "Failed password for invalid user admin from 203.0.113.45 port 51234 ssh2"
+    }
+  },
+  {
+    "event_id": "EVT-006",
+    "timestamp": "2026-11-25T10:15:39Z",
+    "host": "PAY-LNX-GW-01",
+    "log_source": "linux_auth",
+    "expected_rule_id": "VTX-1004",
+    "payload": {
+      "service": "sshd",
+      "src_ip": "198.51.100.22",
+      "message": "Failed password for deploy from 198.51.100.22 port 44120 ssh2"
+    }
+  },
+  {
+    "event_id": "EVT-007",
+    "timestamp": "2026-11-25T10:20:00Z",
+    "host": "FIN-WKSTN-01",
+    "log_source": "sysmon",
+    "expected_rule_id": null,
+    "payload": {
+      "EventID": 1,
+      "Image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      "CommandLine": "powershell.exe -Command \"Get-Service -Name wuauserv\"",
+      "User": "CORP\\ops.admin"
+    }
+  },
+  {
+    "event_id": "EVT-008",
+    "timestamp": "2026-11-25T10:22:10Z",
+    "host": "CDE-APP-WIN-01",
+    "log_source": "sysmon",
+    "expected_rule_id": null,
+    "payload": {
+      "EventID": 10,
+      "SourceImage": "C:\\Windows\\System32\\svchost.exe",
+      "TargetImage": "C:\\Windows\\System32\\lsass.exe",
+      "GrantedAccess": "0x1000"
+    }
+  },
+  {
+    "event_id": "EVT-009",
+    "timestamp": "2026-11-25T10:25:05Z",
+    "host": "CDE-APP-WIN-01",
+    "log_source": "sysmon",
+    "expected_rule_id": null,
+    "payload": {
+      "EventID": 1,
+      "Image": "C:\\Windows\\System32\\schtasks.exe",
+      "CommandLine": "schtasks.exe /query /fo LIST",
+      "User": "CORP\\auditor"
+    }
+  },
+  {
+    "event_id": "EVT-010",
+    "timestamp": "2026-11-25T10:30:18Z",
+    "host": "PAY-LNX-GW-01",
+    "log_source": "linux_auth",
+    "expected_rule_id": null,
+    "payload": {
+      "service": "sshd",
+      "src_ip": "198.51.100.10",
+      "message": "Accepted publickey for deploy from 198.51.100.10 port 50211 ssh2"
+    }
+  }
+]

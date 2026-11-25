@@ -1,0 +1,19 @@
+rule_id: VTX-1004
+title: SSH Authentication Failure Pattern
+description: Detecta tentativas falhas de autenticação SSH (usuário válido ou inválido) para identificação de força bruta e password spraying em servidores Linux.
+severity: MEDIUM
+log_source: linux_auth
+mitre_tactic: Credential Access
+mitre_technique: T1110.001
+pci_dss_refs:
+  - Req. 8.3.4
+  - Req. 10.2.1.4
+nist_csf_refs:
+  - DE.CM-01
+  - DE.CM-03
+conditions:
+  - field: service
+    equals: sshd
+  - field: message
+    regex: 'Failed password for (invalid user )?\S+ from \d{1,3}(\.\d{1,3}){3}'
+false_positive_notes: Erros pontuais de digitação de administradores; correlacionar por volume/janela de tempo no SIEM antes de acionar bloqueio ativo.

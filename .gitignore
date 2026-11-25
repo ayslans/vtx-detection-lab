@@ -1,0 +1,25 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+build/
+
+# Ambientes e segredos
+.env
+.env.*
+!.env.example
+
+# Artefatos locais temporários (evidências oficiais ficam em docs/evidence/)
+telemetry/output/
+*.log
+
+# SO e editores
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

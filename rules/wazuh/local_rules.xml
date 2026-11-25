@@ -1,0 +1,48 @@
+<group name="vtx_detection_lab,">
+  <!-- VTX-1001: Encoded PowerShell Execution -->
+  <rule id="100101" level="10">
+    <if_sid>61603</if_sid>
+    <field name="win.eventdata.image" type="pcre2">(?i)(powershell|pwsh)\.exe$</field>
+    <field name="win.eventdata.commandLine" type="pcre2">(?i)(-enc|-EncodedCommand|FromBase64String)</field>
+    <description>VTX-1001: Execução de PowerShell com comando codificado/ofuscado detectada.</description>
+    <mitre>
+      <id>T1059.001</id>
+    </mitre>
+    <group>sysmon,execution,pci_dss_10.2.1,pci_dss_11.5,nist_800_53_AU.14,</group>
+  </rule>
+
+  <!-- VTX-1002: Suspicious LSASS Memory Access -->
+  <rule id="100102" level="12">
+    <if_sid>61612</if_sid>
+    <field name="win.eventdata.targetImage" type="pcre2">(?i)\\lsass\.exe$</field>
+    <field name="win.eventdata.grantedAccess" type="pcre2">(?i)(0x1010|0x1410|0x1fffff|0x1038)</field>
+    <description>VTX-1002: Acesso suspeito à memória do LSASS (possível credential dumping).</description>
+    <mitre>
+      <id>T1003.001</id>
+    </mitre>
+    <group>sysmon,credential_access,pci_dss_8.3,pci_dss_10.2.1,nist_800_53_AC.7,</group>
+  </rule>
+
+  <!-- VTX-1003: Suspicious Scheduled Task Creation -->
+  <rule id="100103" level="10">
+    <if_sid>61603</if_sid>
+    <field name="win.eventdata.image" type="pcre2">(?i)schtasks\.exe$</field>
+    <field name="win.eventdata.commandLine" type="pcre2">(?i)(/create|-create)</field>
+    <description>VTX-1003: Criação de tarefa agendada via schtasks.exe detectada.</description>
+    <mitre>
+      <id>T1053.005</id>
+    </mitre>
+    <group>sysmon,persistence,pci_dss_10.2.1,pci_dss_10.2.2,</group>
+  </rule>
+
+  <!-- VTX-1004: SSH Brute Force / Multiple Auth Failures -->
+  <rule id="100104" level="8" frequency="5" timeframe="60">
+    <if_matched_sid>5716</if_matched_sid>
+    <same_source_ip />
+    <description>VTX-1004: Múltiplas falhas de autenticação SSH a partir do mesmo IP (força bruta).</description>
+    <mitre>
+      <id>T1110.001</id>
+    </mitre>
+    <group>sshd,authentication_failures,pci_dss_8.3.4,pci_dss_10.2.1.4,</group>
+  </rule>
+</group>

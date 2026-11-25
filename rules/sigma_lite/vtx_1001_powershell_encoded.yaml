@@ -1,0 +1,26 @@
+rule_id: VTX-1001
+title: Encoded PowerShell Execution
+description: Detecta execução de PowerShell com argumentos ofuscados/codificados em Base64, técnica frequente em estágios iniciais de execução de payload.
+severity: HIGH
+log_source: sysmon
+mitre_tactic: Execution
+mitre_technique: T1059.001
+pci_dss_refs:
+  - Req. 10.2.1
+  - Req. 11.5
+nist_csf_refs:
+  - DE.CM-09
+  - DE.AE-02
+conditions:
+  - field: EventID
+    equals: "1"
+  - field: Image
+    contains_any:
+      - powershell.exe
+      - pwsh.exe
+  - field: CommandLine
+    contains_any:
+      - "-enc"
+      - "-EncodedCommand"
+      - "FromBase64String"
+false_positive_notes: Scripts administrativos de automação (SCCM, Ansible, agentes de inventário) podem usar Base64; validar processo pai e assinatura digital.
