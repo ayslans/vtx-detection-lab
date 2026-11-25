@@ -1,6 +1,6 @@
 # Relatório de Validação Detection-as-Code — vtx-detection-lab
 
-- **Gerado em:** 2026-11-25 16:44 UTC
+- **Gerado em:** 2026-11-25 16:47 UTC
 - **Regras avaliadas:** 4
 - **Eventos de telemetria:** 10
 - **Status do Quality Gate:** `PASS (0 FP / 0 FN)`
