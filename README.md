@@ -1,5 +1,7 @@
 # vtx-detection-lab — Project Cookbook
 
+[![CI](https://github.com/ayslans/vtx-detection-lab/actions/workflows/ci.yml/badge.svg)](https://github.com/ayslans/vtx-detection-lab/actions/workflows/ci.yml)
+
 Laboratório de **Detection-as-Code** para engenharia de detecção (**Blue Team / SOC / AppSec**) em ambientes **FinTech / PCI-DSS**. Combina regras declarativas em **YAML** com paridade validada em **Wazuh XML**, mapeamento **MITRE ATT&CK**, motor de *replay* de telemetria simulada (estilo **Atomic Red Team**) com cálculo de **Precision / Recall**, Quality Gate para CI/CD (`--strict`) e playbooks estruturados de **Resposta a Incidentes (IR)**.
 
 ---
