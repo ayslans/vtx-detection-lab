@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-import xml.etree.ElementTree as ET
+from defusedxml import DefusedXmlException, ElementTree as ET
 from pathlib import Path
 
 import yaml
@@ -65,7 +65,7 @@ def parse_wazuh_rules_xml(xml_path: str | Path = "rules/wazuh/local_rules.xml") 
 
     try:
         tree = ET.parse(path)
-    except ET.ParseError as exc:
+    except (ET.ParseError, DefusedXmlException) as exc:
         raise ValueError(f"XML do Wazuh malformado em {path}: {exc}") from exc
 
     root = tree.getroot()
