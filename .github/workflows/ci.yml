@@ -188,3 +188,41 @@ jobs:
           path: artifacts/*.sarif
           if-no-files-found: ignore
           retention-days: 14
+
+      - name: Enrich Detection Alerts with vtx-ti-enricher
+        run: |
+          ALERTS_FILE="${ALERTS_FILE:-out/alerts.json}"
+          if [ ! -f "$ALERTS_FILE" ]; then
+            echo "Nenhum arquivo de alertas encontrado em $ALERTS_FILE — pulando enriquecimento."
+            exit 0
+          fi
+
+          mkdir -p out/enriched
+          chmod 777 out/enriched
+
+          docker run --rm \
+            -v "${{ github.workspace }}/$ALERTS_FILE:/data/in/alerts.json:ro" \
+            -v "${{ github.workspace }}/out/enriched:/data/out" \
+            ghcr.io/ayslans/vtx-ti-enricher:0.1.1 \
+            enrich /data/in/alerts.json \
+              --providers otx,urlhaus \
+              --cache-db /data/out/cache.sqlite3 \
+              --output /data/out/enrich-report.json \
+              --stix-out /data/out/bundle.stix.json \
+              --stix-min-verdict suspicious \
+              --md-out /data/out/soc-report.md
+
+          if [ -f out/enriched/soc-report.md ]; then
+            cat out/enriched/soc-report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload Enriched Threat Intel Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ti-enrichment-report
+          if-no-files-found: warn
+          path: |
+            out/enriched/enrich-report.json
+            out/enriched/bundle.stix.json
+            out/enriched/soc-report.md
