@@ -17,7 +17,10 @@ FROM python:3.12-slim AS runtime
 
 WORKDIR /app
 
-RUN adduser --disabled-password --gecos "" appuser \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends --only-upgrade libzstd1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && adduser --disabled-password --gecos "" appuser \
     && rm -rf /usr/local/lib/python3.12/ensurepip \
               /usr/local/lib/python3.12/site-packages/pip* \
               /usr/local/lib/python3.12/site-packages/setuptools* \
