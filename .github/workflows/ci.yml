@@ -226,6 +226,46 @@ jobs:
           fi
 
           python -m vtx_detection_lab.main correlate "${CORRELATE_ARGS[@]}"
+
+          if [ -s out/enriched/evidence_ledger.jsonl ]; then
+            python -m pip install -q cryptography
+            chmod +x scripts/sign_ledger_head.sh scripts/verify_ledger_head.sh
+            TMP_KEY="/tmp/vtx_ledger_signing_key.pem"
+            TMP_PUB="/tmp/vtx_ledger_signing_pub.pem"
+            trap 'rm -f "/tmp/vtx_ledger_signing_key.pem" "/tmp/vtx_ledger_signing_pub.pem"' EXIT
+            if [ -n "${VTX_LEDGER_SIGNING_KEY_PEM:-}" ]; then
+              printf '%s\n' "${VTX_LEDGER_SIGNING_KEY_PEM}" > "${TMP_KEY}"
+              chmod 600 "${TMP_KEY}"
+              ./scripts/sign_ledger_head.sh \
+                out/enriched/evidence_ledger.jsonl \
+                out/enriched/evidence_ledger.head.sig.json \
+                "${TMP_KEY}" \
+                "github-actions-ti-bridge"
+              if [ -s config/ledger_signing_pub.pem ]; then
+                ./scripts/verify_ledger_head.sh \
+                  out/enriched/evidence_ledger.jsonl \
+                  out/enriched/evidence_ledger.head.sig.json \
+                  config/ledger_signing_pub.pem
+              else
+                ./scripts/verify_ledger_head.sh \
+                  out/enriched/evidence_ledger.jsonl \
+                  out/enriched/evidence_ledger.head.sig.json
+              fi
+            else
+              openssl genpkey -algorithm Ed25519 -out "${TMP_KEY}" >/dev/null 2>&1
+              chmod 600 "${TMP_KEY}"
+              openssl pkey -in "${TMP_KEY}" -pubout -out "${TMP_PUB}" >/dev/null 2>&1
+              ./scripts/sign_ledger_head.sh \
+                out/enriched/evidence_ledger.jsonl \
+                out/enriched/evidence_ledger.head.sig.json \
+                "${TMP_KEY}" \
+                "ephemeral-ci-signer"
+              ./scripts/verify_ledger_head.sh \
+                out/enriched/evidence_ledger.jsonl \
+                out/enriched/evidence_ledger.head.sig.json \
+                "${TMP_PUB}"
+            fi
+          fi
           test -s out/enriched/bridge_correlated_assets.json
           test -s out/enriched/bridge_soc_summary.md
 
