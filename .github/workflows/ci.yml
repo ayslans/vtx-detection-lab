@@ -84,6 +84,28 @@ jobs:
             --alerts-jsonl artifacts/alerts.jsonl \
             --strict
 
+      - name: Correlate TI enrichment and vulnerability triage by asset_id
+        run: |
+          mkdir -p artifacts/correlation
+          python -m vtx_detection_lab.main correlate \
+            --ti-input telemetry/fixtures/sample_ti_enrichment.json \
+            --triage-input telemetry/fixtures/sample_triage_report.json \
+            --assets examples/assets.yaml \
+            --output artifacts/correlation/correlated_assets.json \
+            --md-output artifacts/correlation/correlated_soc_summary.md
+          test -s artifacts/correlation/correlated_assets.json
+          test -s artifacts/correlation/correlated_soc_summary.md
+
+      - name: Upload SOC correlation artifacts (JSON + Markdown)
+        uses: actions/upload-artifact@v7
+        with:
+          name: soc-correlation-report-py${{ matrix.python-version }}
+          path: |
+            artifacts/correlation/correlated_assets.json
+            artifacts/correlation/correlated_soc_summary.md
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Upload replay report and alerts JSONL artifacts
         if: matrix.python-version == '3.12'
         uses: actions/upload-artifact@v7

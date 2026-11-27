@@ -1,0 +1,49 @@
+{
+  "schema_version": "1.0",
+  "source": "vtx-vuln-triage-ai",
+  "asset": {
+    "asset_id": "pay-lnx-gw-01",
+    "name": "Gateway de Pagamentos Linux",
+    "owner": "squad-pagamentos@empresa.local",
+    "environment": "prod",
+    "exposure": "internet",
+    "criticality": "critical"
+  },
+  "summary": {
+    "total": 1,
+    "P0": 1,
+    "P1": 0,
+    "P2": 0,
+    "P3": 0,
+    "pci_in_scope_count": 1
+  },
+  "findings": [
+    {
+      "finding_id": "vtx-vuln-abcdef1234567890",
+      "cve_id": "CVE-2026-124851",
+      "source_scanner": "trivy",
+      "finding_type": "cve",
+      "package_name": "libzstd1",
+      "installed_version": "1.5.5",
+      "fixed_version": "1.5.6",
+      "severity": "CRITICAL",
+      "cvss_score": 9.1,
+      "epss_score": 0.85,
+      "in_cisa_kev": true,
+      "target": "pay-lnx-gw-01:latest",
+      "asset_id": "pay-lnx-gw-01",
+      "owner": "squad-pagamentos@empresa.local",
+      "asset_criticality": "CDE",
+      "pci_dss_in_scope": true,
+      "priority": "P0",
+      "base_priority": "P0",
+      "asset_adjustment": 0,
+      "sla_days": 2,
+      "triaged_at": "2026-11-27T04:00:00Z",
+      "sla_due_at": "2026-11-29T04:00:00Z",
+      "rationale": [
+        "Exploração ativa confirmada na base CISA KEV em ativo CDE."
+      ]
+    }
+  ]
+}

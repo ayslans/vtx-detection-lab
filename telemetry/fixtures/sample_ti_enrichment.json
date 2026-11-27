@@ -1,0 +1,22 @@
+{
+  "schema_version": "1.0",
+  "source": "vtx-ti-enricher",
+  "results": [
+    {
+      "asset_id": "pay-lnx-gw-01",
+      "host": "PAY-LNX-GW-01",
+      "rule_id": "VTX-1005",
+      "mitre_technique": "T1190",
+      "indicator": "203.0.113.42",
+      "verdict": "malicious"
+    },
+    {
+      "asset_id": "cde-app-win-01",
+      "host": "CDE-APP-WIN-01",
+      "rule_id": "VTX-1001",
+      "mitre_technique": "T1059.001",
+      "indicator": "198.51.100.7",
+      "verdict": "suspicious"
+    }
+  ]
+}
