@@ -77,7 +77,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Download replay alerts JSONL artifact
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v7
         with:
           name: atomic-replay-report
           path: artifacts
