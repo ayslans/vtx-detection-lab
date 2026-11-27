@@ -166,7 +166,7 @@ jobs:
             --md-output out/enriched/bridge_soc_summary.md
           )
           if [ -s out/enriched/evidence_ledger.jsonl ]; then
-            CORRELATE_ARGS+=(--evidence-log out/enriched/evidence_ledger.jsonl)
+            CORRELATE_ARGS+=(--evidence-log out/enriched/evidence_ledger.jsonl --verify-evidence-chain)
           fi
 
           python -m vtx_detection_lab.main correlate "${CORRELATE_ARGS[@]}"
