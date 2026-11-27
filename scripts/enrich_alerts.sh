@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Conecta alertas JSON/JSONL do vtx-detection-lab ao vtx-ti-enricher
+# Conecta alertas JSON/JSONL do vtx-detection-lab ao vtx-ti-enricher (local ou Docker GHCR)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 ALERTS_FILE="${ALERTS_FILE:-${REPO_ROOT}/data/alerts.jsonl}"
 OUTPUT_FILE="${OUTPUT_FILE:-${REPO_ROOT}/data/enriched/enrich_report.json}"
 ENRICHER_DIR="${ENRICHER_DIR:-${REPO_ROOT}/../vtx-ti-enricher}"
+ENRICHER_DOCKER_IMAGE="${ENRICHER_DOCKER_IMAGE:-ghcr.io/ayslans/vtx-ti-enricher:0.1.1}"
 PROVIDERS="${PROVIDERS:-abuseipdb,otx,urlhaus,virustotal}"
 CACHE_DB=""
 MD_OUT=""
@@ -17,11 +18,12 @@ NO_CACHE=false
 INCLUDE_INTERNAL=false
 NO_DEFANG=false
 DRY_RUN=false
-TMP_JSON=""
+USE_DOCKER=false
+TMP_DIR=""
 
 cleanup() {
-  if [[ -n "${TMP_JSON}" && -f "${TMP_JSON}" ]]; then
-    rm -f "${TMP_JSON}"
+  if [[ -n "${TMP_DIR}" && -d "${TMP_DIR}" ]]; then
+    rm -rf "${TMP_DIR}"
   fi
 }
 trap cleanup EXIT
@@ -44,6 +46,7 @@ Opções:
       --include-internal       Inclui IPs/indicadores internos (desativa guarda OPSEC)
       --no-defang              Exibe indicadores sem defang no terminal/Markdown
   -e, --enricher-dir DIR       Caminho do repo vtx-ti-enricher [padrão: ../vtx-ti-enricher]
+      --docker                 Força execução via container Docker (ENRICHER_DOCKER_IMAGE)
       --dry-run                Executa apenas 'vtx-ti-enricher parse' (sem APIs externas)
   -h, --help                   Exibe esta ajuda
 USAGE
@@ -62,6 +65,7 @@ while [[ $# -gt 0 ]]; do
     --include-internal) INCLUDE_INTERNAL=true; shift ;;
     --no-defang) NO_DEFANG=true; shift ;;
     -e|--enricher-dir) ENRICHER_DIR="$2"; shift 2 ;;
+    --docker) USE_DOCKER=true; shift ;;
     --dry-run) DRY_RUN=true; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Erro: opção desconhecida: $1" >&2; usage; exit 1 ;;
@@ -77,23 +81,34 @@ if [[ -z "${CACHE_DB}" ]]; then
   CACHE_DB="${ENRICHER_DIR}/.vtx_ti_cache.sqlite3"
 fi
 
-# Resolve o executável do vtx-ti-enricher
-if command -v vtx-ti-enricher >/dev/null 2>&1; then
-  ENRICHER_BIN=("vtx-ti-enricher")
-elif [[ -x "${ENRICHER_DIR}/.venv/bin/vtx-ti-enricher" ]]; then
-  ENRICHER_BIN=("${ENRICHER_DIR}/.venv/bin/vtx-ti-enricher")
-elif [[ -x "${ENRICHER_DIR}/.venv/bin/python" ]]; then
-  ENRICHER_BIN=("${ENRICHER_DIR}/.venv/bin/python" "-m" "vtx_ti_enricher.main")
-else
-  echo "Erro: vtx-ti-enricher não encontrado no PATH nem em ${ENRICHER_DIR}/.venv." >&2
-  exit 1
+# Resolve o executável local ou faz fallback para Docker GHCR
+ENRICHER_BIN=()
+if [[ "${USE_DOCKER}" != "true" ]]; then
+  if command -v vtx-ti-enricher >/dev/null 2>&1; then
+    ENRICHER_BIN=("vtx-ti-enricher")
+  elif [[ -x "${ENRICHER_DIR}/.venv/bin/vtx-ti-enricher" ]]; then
+    ENRICHER_BIN=("${ENRICHER_DIR}/.venv/bin/vtx-ti-enricher")
+  elif [[ -x "${ENRICHER_DIR}/.venv/bin/python" ]]; then
+    ENRICHER_BIN=("${ENRICHER_DIR}/.venv/bin/python" "-m" "vtx_ti_enricher.main")
+  fi
 fi
 
-# Normaliza JSONL (1 objeto JSON por linha) para um arquivo .json temporário
+if [[ ${#ENRICHER_BIN[@]} -eq 0 ]]; then
+  if command -v docker >/dev/null 2>&1; then
+    USE_DOCKER=true
+  else
+    echo "Erro: vtx-ti-enricher não encontrado localmente e docker indisponível." >&2
+    exit 1
+  fi
+fi
+
+# Normaliza JSONL (1 alerta por linha) para .json legível inclusive por container non-root
 TARGET_INPUT="${ALERTS_FILE}"
 if [[ "${ALERTS_FILE}" == *.jsonl ]]; then
-  TMP_JSON="$(mktemp /tmp/vtx_alerts_XXXXXX.json)"
-  python3 - "${ALERTS_FILE}" "${TMP_JSON}" << 'PY'
+  TMP_DIR="$(mktemp -d)"
+  chmod 755 "${TMP_DIR}"
+  TARGET_INPUT="${TMP_DIR}/alerts.json"
+  python3 - "${ALERTS_FILE}" "${TARGET_INPUT}" << 'INNER_PY'
 import json
 import sys
 from pathlib import Path
@@ -116,31 +131,66 @@ if not records:
 
 dst.write_text(json.dumps(records, indent=2, ensure_ascii=False), encoding="utf-8")
 print(f"[vtx-detection-lab] {len(records)} alerta(s) JSONL preparados para o vtx-ti-enricher.")
-PY
-  TARGET_INPUT="${TMP_JSON}"
+INNER_PY
+  chmod 644 "${TARGET_INPUT}"
 fi
 
-mkdir -p "$(dirname "${OUTPUT_FILE}")"
+OUT_DIR="$(dirname "${OUTPUT_FILE}")"
+mkdir -p "${OUT_DIR}"
 [[ -n "${MD_OUT}" ]] && mkdir -p "$(dirname "${MD_OUT}")"
 [[ -n "${STIX_OUT}" ]] && mkdir -p "$(dirname "${STIX_OUT}")"
 
-if [[ "${DRY_RUN}" == "true" ]]; then
-  CMD=("${ENRICHER_BIN[@]}" "parse" "${TARGET_INPUT}" "--output" "${OUTPUT_FILE}")
-  [[ "${INCLUDE_INTERNAL}" == "true" ]] && CMD+=("--include-internal")
-  [[ "${NO_DEFANG}" == "true" ]] && CMD+=("--no-defang")
-else
-  CMD=(
-    "${ENRICHER_BIN[@]}" "enrich" "${TARGET_INPUT}"
-    "--providers" "${PROVIDERS}"
-    "--cache-db" "${CACHE_DB}"
-    "--output" "${OUTPUT_FILE}"
+if [[ "${USE_DOCKER}" == "true" ]]; then
+  ABS_IN_DIR="$(cd "$(dirname "${TARGET_INPUT}")" && pwd)"
+  IN_BASE="$(basename "${TARGET_INPUT}")"
+  ABS_OUT_DIR="$(cd "${OUT_DIR}" && pwd)"
+  OUT_BASE="$(basename "${OUTPUT_FILE}")"
+  chmod 777 "${ABS_OUT_DIR}"
+
+  DOCKER_ARGS=(
+    docker run --rm
+    -v "${ABS_IN_DIR}:/data/in:ro"
+    -v "${ABS_OUT_DIR}:/data/out"
+    "${ENRICHER_DOCKER_IMAGE}"
   )
-  [[ "${NO_CACHE}" == "true" ]] && CMD+=("--no-cache")
-  [[ "${INCLUDE_INTERNAL}" == "true" ]] && CMD+=("--include-internal")
-  [[ "${NO_DEFANG}" == "true" ]] && CMD+=("--no-defang")
-  [[ -n "${MD_OUT}" ]] && CMD+=("--md-out" "${MD_OUT}")
-  [[ -n "${STIX_OUT}" ]] && CMD+=("--stix-out" "${STIX_OUT}")
-  [[ -n "${STIX_MIN_VERDICT}" ]] && CMD+=("--stix-min-verdict" "${STIX_MIN_VERDICT}")
+
+  if [[ "${DRY_RUN}" == "true" ]]; then
+    CMD=("${DOCKER_ARGS[@]}" "parse" "/data/in/${IN_BASE}" "--output" "/data/out/${OUT_BASE}")
+    [[ "${INCLUDE_INTERNAL}" == "true" ]] && CMD+=("--include-internal")
+    [[ "${NO_DEFANG}" == "true" ]] && CMD+=("--no-defang")
+  else
+    CMD=(
+      "${DOCKER_ARGS[@]}" "enrich" "/data/in/${IN_BASE}"
+      "--providers" "${PROVIDERS}"
+      "--cache-db" "/data/out/cache.sqlite3"
+      "--output" "/data/out/${OUT_BASE}"
+    )
+    [[ "${NO_CACHE}" == "true" ]] && CMD+=("--no-cache")
+    [[ "${INCLUDE_INTERNAL}" == "true" ]] && CMD+=("--include-internal")
+    [[ "${NO_DEFANG}" == "true" ]] && CMD+=("--no-defang")
+    [[ -n "${MD_OUT}" ]] && CMD+=("--md-out" "/data/out/$(basename "${MD_OUT}")")
+    [[ -n "${STIX_OUT}" ]] && CMD+=("--stix-out" "/data/out/$(basename "${STIX_OUT}")")
+    [[ -n "${STIX_MIN_VERDICT}" ]] && CMD+=("--stix-min-verdict" "${STIX_MIN_VERDICT}")
+  fi
+else
+  if [[ "${DRY_RUN}" == "true" ]]; then
+    CMD=("${ENRICHER_BIN[@]}" "parse" "${TARGET_INPUT}" "--output" "${OUTPUT_FILE}")
+    [[ "${INCLUDE_INTERNAL}" == "true" ]] && CMD+=("--include-internal")
+    [[ "${NO_DEFANG}" == "true" ]] && CMD+=("--no-defang")
+  else
+    CMD=(
+      "${ENRICHER_BIN[@]}" "enrich" "${TARGET_INPUT}"
+      "--providers" "${PROVIDERS}"
+      "--cache-db" "${CACHE_DB}"
+      "--output" "${OUTPUT_FILE}"
+    )
+    [[ "${NO_CACHE}" == "true" ]] && CMD+=("--no-cache")
+    [[ "${INCLUDE_INTERNAL}" == "true" ]] && CMD+=("--include-internal")
+    [[ "${NO_DEFANG}" == "true" ]] && CMD+=("--no-defang")
+    [[ -n "${MD_OUT}" ]] && CMD+=("--md-out" "${MD_OUT}")
+    [[ -n "${STIX_OUT}" ]] && CMD+=("--stix-out" "${STIX_OUT}")
+    [[ -n "${STIX_MIN_VERDICT}" ]] && CMD+=("--stix-min-verdict" "${STIX_MIN_VERDICT}")
+  fi
 fi
 
 echo "[vtx-detection-lab] Executando: ${CMD[*]}"

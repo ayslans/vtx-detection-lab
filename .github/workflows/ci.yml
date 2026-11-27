@@ -45,19 +45,70 @@ jobs:
       - name: Validate YAML catalog & Wazuh XML MITRE parity
         run: python -m vtx_detection_lab.main validate
 
-      - name: Run telemetry replay strict gate (0 FP / 0 FN)
+      - name: Validate enrich_alerts.sh syntax
+        run: bash -n scripts/enrich_alerts.sh
+
+      - name: Run telemetry replay strict gate (0 FP / 0 FN) with asset inventory
         run: |
           python -m vtx_detection_lab.main replay \
             --telemetry telemetry/fixtures/atomic_replay_events.json \
+            --assets examples/assets.yaml \
             --output artifacts/atomic_replay_report.md \
+            --alerts-jsonl artifacts/alerts.jsonl \
             --strict
 
-      - name: Upload replay report artifact
+      - name: Upload replay report and alerts JSONL artifacts
         if: matrix.python-version == '3.12'
         uses: actions/upload-artifact@v7
         with:
           name: atomic-replay-report
-          path: artifacts/atomic_replay_report.md
+          path: |
+            artifacts/atomic_replay_report.md
+            artifacts/alerts.jsonl
+          retention-days: 14
+
+  ti-enrichment-bridge:
+    name: TI Bridge — enrich_alerts.sh (--dry-run)
+    runs-on: ubuntu-latest
+    needs: detection-gate
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Download replay alerts JSONL artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: atomic-replay-report
+          path: artifacts
+
+      - name: Run enrich_alerts.sh dry-run against vtx-ti-enricher container
+        run: |
+          chmod +x scripts/enrich_alerts.sh
+          ./scripts/enrich_alerts.sh \
+            --input artifacts/alerts.jsonl \
+            --output out/enriched/parse-report.json \
+            --docker \
+            --dry-run
+
+          python3 - << 'CI_PY'
+          import json
+          from pathlib import Path
+          report = json.loads(Path("out/enriched/parse-report.json").read_text(encoding="utf-8"))
+          summary = report.get("summary", {})
+          print(
+              f"TI dry-run OK: candidates={summary.get('total_candidates')} | "
+              f"enrichable={summary.get('unique_valid')} | "
+              f"filtered_internal={summary.get('skipped_internal')}"
+          )
+          CI_PY
+
+      - name: Upload TI Bridge dry-run report artifact
+        if: always() && hashFiles('out/enriched/parse-report.json') != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: ti-enrichment-dry-run
+          path: out/enriched/parse-report.json
           retention-days: 14
 
   appsec-scan:
@@ -166,7 +217,7 @@ jobs:
       - name: Print Trivy SARIF findings on failure
         if: failure()
         run: |
-          python3 - << 'INNER_EOF'
+          python3 - << 'TRIVY_PY'
           import json
           from pathlib import Path
           for sarif in sorted(Path("artifacts").glob("*.sarif")):
@@ -178,7 +229,7 @@ jobs:
                       lines = [ln.strip() for ln in r.get("message", {}).get("text", "").splitlines() if ln.strip()]
                       print(f"- [{r.get('level')}] {r.get('ruleId')}: {' | '.join(lines[:5])}")
                   print("::endgroup::")
-          INNER_EOF
+          TRIVY_PY
 
       - name: Upload Trivy SARIF artifacts
         if: always()
@@ -188,41 +239,3 @@ jobs:
           path: artifacts/*.sarif
           if-no-files-found: ignore
           retention-days: 14
-
-      - name: Enrich Detection Alerts with vtx-ti-enricher
-        run: |
-          ALERTS_FILE="${ALERTS_FILE:-out/alerts.json}"
-          if [ ! -f "$ALERTS_FILE" ]; then
-            echo "Nenhum arquivo de alertas encontrado em $ALERTS_FILE — pulando enriquecimento."
-            exit 0
-          fi
-
-          mkdir -p out/enriched
-          chmod 777 out/enriched
-
-          docker run --rm \
-            -v "${{ github.workspace }}/$ALERTS_FILE:/data/in/alerts.json:ro" \
-            -v "${{ github.workspace }}/out/enriched:/data/out" \
-            ghcr.io/ayslans/vtx-ti-enricher:0.1.1 \
-            enrich /data/in/alerts.json \
-              --providers otx,urlhaus \
-              --cache-db /data/out/cache.sqlite3 \
-              --output /data/out/enrich-report.json \
-              --stix-out /data/out/bundle.stix.json \
-              --stix-min-verdict suspicious \
-              --md-out /data/out/soc-report.md
-
-          if [ -f out/enriched/soc-report.md ]; then
-            cat out/enriched/soc-report.md >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-      - name: Upload Enriched Threat Intel Artifacts
-        if: always() && hashFiles('out/enriched/*') != ''
-        uses: actions/upload-artifact@v7
-        with:
-          name: ti-enrichment-report
-          if-no-files-found: warn
-          path: |
-            out/enriched/enrich-report.json
-            out/enriched/bundle.stix.json
-            out/enriched/soc-report.md
