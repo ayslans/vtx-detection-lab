@@ -48,6 +48,33 @@ jobs:
       - name: Validate enrich_alerts.sh syntax
         run: bash -n scripts/enrich_alerts.sh
 
+      - name: Normalize Nginx and FastAPI logs and validate strict replay
+        run: |
+          mkdir -p artifacts/normalized
+          python -m vtx_detection_lab.main normalize \
+            --input telemetry/fixtures/sample_nginx.log \
+            --source nginx \
+            --host PAY-LNX-GW-01 \
+            --assets examples/assets.yaml \
+            --output artifacts/normalized/nginx.jsonl \
+            --strict
+
+          python -m vtx_detection_lab.main normalize \
+            --input telemetry/fixtures/sample_fastapi.log \
+            --source fastapi \
+            --host PAY-LNX-GW-01 \
+            --assets examples/assets.yaml \
+            --output artifacts/normalized/fastapi.jsonl \
+            --strict
+
+          cat artifacts/normalized/nginx.jsonl artifacts/normalized/fastapi.jsonl > artifacts/normalized/http_combined.jsonl
+
+          python -m vtx_detection_lab.main replay \
+            --telemetry artifacts/normalized/http_combined.jsonl \
+            --assets examples/assets.yaml \
+            --output artifacts/normalized/http_replay_report.md \
+            --strict
+
       - name: Run telemetry replay strict gate (0 FP / 0 FN) with asset inventory
         run: |
           python -m vtx_detection_lab.main replay \
