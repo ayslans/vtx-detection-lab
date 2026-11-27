@@ -4,7 +4,11 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from vtx_detection_lab.assets import UNKNOWN_ASSET_ID, load_asset_inventory
-from vtx_detection_lab.correlator import CorrelationReport, correlate_ti_and_triage
+from vtx_detection_lab.correlator import (
+    CorrelationReport,
+    correlate_ti_and_triage,
+    render_correlation_markdown,
+)
 from vtx_detection_lab.main import app
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -12,7 +16,7 @@ EXAMPLES_ASSETS = REPO_ROOT / "examples" / "assets.yaml"
 runner = CliRunner()
 
 
-def test_correlate_merges_ti_and_triage_by_asset_id(tmp_path: Path) -> None:
+def test_correlate_merges_ti_and_triage_by_asset_id_and_exports_soc_markdown(tmp_path: Path) -> None:
     ti_payload = {
         "schema_version": "1.0",
         "source": "vtx-ti-enricher",
@@ -74,6 +78,7 @@ def test_correlate_merges_ti_and_triage_by_asset_id(tmp_path: Path) -> None:
     ti_file = tmp_path / "ti_report.json"
     triage_file = tmp_path / "triage_report.json"
     out_file = tmp_path / "correlated.json"
+    md_file = tmp_path / "correlated_soc.md"
     ti_file.write_text(json.dumps(ti_payload), encoding="utf-8")
     triage_file.write_text(json.dumps(triage_payload), encoding="utf-8")
 
@@ -89,10 +94,13 @@ def test_correlate_merges_ti_and_triage_by_asset_id(tmp_path: Path) -> None:
             str(EXAMPLES_ASSETS),
             "--output",
             str(out_file),
+            "--md-output",
+            str(md_file),
         ],
     )
     assert result.exit_code == 0, result.output
     assert out_file.exists()
+    assert md_file.exists()
 
     report = CorrelationReport.model_validate_json(out_file.read_text(encoding="utf-8"))
     assert report.total_assets == 1
@@ -111,27 +119,36 @@ def test_correlate_merges_ti_and_triage_by_asset_id(tmp_path: Path) -> None:
     assert ctx.combined_risk.corroborated_exposure is True
     assert ctx.combined_risk.risk_tier == "CRITICAL"
 
+    md_text = md_file.read_text(encoding="utf-8")
+    assert "## Ativos com Exposição Corroborada (Ação Prioritária SOC)" in md_text
+    assert "### `pay-lnx-gw-01` — Risco `CRITICAL`" in md_text
+    assert "203[.]0[.]113[.]42" in md_text
+    assert "CVE-2026-124851" in md_text
+    assert "VTX-1005" in md_text
+    assert "T1190" in md_text
 
-def test_correlate_falls_back_to_unknown_asset_when_missing() -> None:
+
+def test_correlate_falls_back_to_unknown_asset_and_renders_non_corroborated_markdown(tmp_path: Path) -> None:
     inv = load_asset_inventory(EXAMPLES_ASSETS)
-    report = correlate_ti_and_triage(
+    empty_report = correlate_ti_and_triage(
         ti_paths=[],
         triage_paths=[],
         asset_inventory=inv,
     )
-    assert report.total_assets == 0
+    assert empty_report.total_assets == 0
 
-    ti_unknown = [{"verdict": "suspicious", "indicator": "198.51.100.99"}]
-    # Usa arquivo temporário via correlate_ti_and_triage passando lista em tmp_path
-    import tempfile
+    tpath = tmp_path / "ti_unknown.json"
+    tpath.write_text(
+        json.dumps([{"verdict": "suspicious", "indicator": "198.51.100.99"}]),
+        encoding="utf-8",
+    )
 
-    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as tf:
-        json.dump(ti_unknown, tf)
-        tpath = Path(tf.name)
-    try:
-        rep = correlate_ti_and_triage([tpath], [], asset_inventory=inv)
-        assert rep.total_assets == 1
-        assert rep.assets[0].asset_id == UNKNOWN_ASSET_ID
-        assert rep.assets[0].threat_intel.highest_verdict == "suspicious"
-    finally:
-        tpath.unlink(missing_ok=True)
+    rep = correlate_ti_and_triage([tpath], [], asset_inventory=inv)
+    assert rep.total_assets == 1
+    assert rep.corroborated_assets == 0
+    assert rep.assets[0].asset_id == UNKNOWN_ASSET_ID
+    assert rep.assets[0].threat_intel.highest_verdict == "suspicious"
+
+    md_text = render_correlation_markdown(rep)
+    assert "Nenhum ativo com exposição corroborada" in md_text
+    assert "| `unknown-asset` |" in md_text

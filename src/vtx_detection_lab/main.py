@@ -15,6 +15,7 @@ from vtx_detection_lab.assets import (
 )
 from vtx_detection_lab.correlator import (
     correlate_ti_and_triage,
+    save_correlation_markdown,
     save_correlation_report,
 )
 from vtx_detection_lab.engine.evaluator import (
@@ -246,6 +247,12 @@ def correlate_assets(
         "-o",
         help="Caminho do relatório JSON consolidado por asset_id.",
     ),
+    md_output: Optional[Path] = typer.Option(
+        None,
+        "--md-output",
+        "-m",
+        help="Caminho opcional do resumo executivo SOC em Markdown para ativos corroborados.",
+    ),
     assets: Optional[Path] = typer.Option(
         None,
         "--assets",
@@ -266,6 +273,10 @@ def correlate_assets(
         asset_inventory=inventory,
     )
     saved = save_correlation_report(report, output)
+
+    if md_output is not None:
+        saved_md = save_correlation_markdown(report, md_output)
+        console.print(f"[green]Resumo SOC Markdown salvo em:[/green] {saved_md}")
 
     table = Table(title="vtx-detection-lab — Asset Correlation Summary")
     table.add_column("Métrica", style="cyan")

@@ -144,6 +144,12 @@ def _extract_indicator_and_verdict(item: dict[str, Any]) -> tuple[Optional[str],
     return None, verdict
 
 
+def _defang_ioc(value: str) -> str:
+    defanged = re.sub(r"(?i)^https://", "hxxps://", value.strip())
+    defanged = re.sub(r"(?i)^http://", "hxxp://", defanged)
+    return defanged.replace(".", "[.]")
+
+
 def _compute_risk(
     ti: ThreatIntelAssetSummary,
     vt: VulnerabilityAssetSummary,
@@ -156,9 +162,10 @@ def _compute_risk(
     )
     has_vuln_signal = vt.finding_count > 0
 
-    corroborated = (
-        has_vuln_signal
-        and (len(ti.malicious_iocs) > 0 or len(ti.suspicious_iocs) > 0 or ti.highest_verdict in ("malicious", "suspicious"))
+    corroborated = has_vuln_signal and (
+        len(ti.malicious_iocs) > 0
+        or len(ti.suspicious_iocs) > 0
+        or ti.highest_verdict in ("malicious", "suspicious")
     )
 
     if corroborated and (
@@ -203,7 +210,11 @@ def correlate_ti_and_triage(
     records_by_asset: dict[str, ConsolidatedAssetContext] = {}
     sets_by_asset: dict[str, dict[str, set[str]]] = {}
 
-    def get_ctx(aid: str, host: Optional[str] = None, owner: Optional[str] = None) -> ConsolidatedAssetContext:
+    def get_ctx(
+        aid: str,
+        host: Optional[str] = None,
+        owner: Optional[str] = None,
+    ) -> ConsolidatedAssetContext:
         if aid not in records_by_asset:
             records_by_asset[aid] = ConsolidatedAssetContext(
                 asset_id=aid,
@@ -227,8 +238,13 @@ def correlate_ti_and_triage(
 
     for tpath in ti_paths:
         for doc in _load_json_records(tpath):
+            top_candidate = (
+                doc.get("asset_id") or (doc.get("asset") or {}).get("asset_id")
+                if isinstance(doc.get("asset"), dict)
+                else doc.get("asset_id")
+            )
             top_aid = _normalize_asset_id(
-                doc.get("asset_id") or (doc.get("asset") or {}).get("asset_id") if isinstance(doc.get("asset"), dict) else doc.get("asset_id"),
+                top_candidate,
                 doc.get("host"),
                 asset_inventory,
             )
@@ -328,7 +344,7 @@ def correlate_ti_and_triage(
 
         ti.malicious_iocs = sorted(s["mal_iocs"])
         ti.suspicious_iocs = sorted(s["sus_iocs"])
-        ti.ioc_count = len(s["mal_iocs"]) + len(s["sus_iocs"])
+        ti.ioc_count = len(ti.malicious_iocs) + len(ti.suspicious_iocs)
         ti.matched_rules = sorted(s["rules"])
         ti.mitre_techniques = sorted(s["mitre"])
 
@@ -350,6 +366,84 @@ def correlate_ti_and_triage(
     )
 
 
+def render_correlation_markdown(report: CorrelationReport) -> str:
+    lines: list[str] = [
+        "# vtx-detection-lab — Resumo Executivo SOC (Correlação por Ativo)",
+        "",
+        "## Resumo Geral",
+        "",
+        "| Métrica | Quantidade |",
+        "| :--- | ---: |",
+        f"| Ativos consolidados | {report.total_assets} |",
+        f"| Ativos com exposição corroborada (TI + Vuln) | {report.corroborated_assets} |",
+        f"| Ativos em risco CRITICAL | {report.critical_assets} |",
+        "",
+        "## Ativos com Exposição Corroborada (Ação Prioritária SOC)",
+        "",
+    ]
+
+    corroborated = [a for a in report.assets if a.combined_risk.corroborated_exposure]
+    if not corroborated:
+        lines.append(
+            "_Nenhum ativo com exposição corroborada (TI + Vulnerabilidades) nesta execução._"
+        )
+        lines.append("")
+    else:
+        for asset in corroborated:
+            ti = asset.threat_intel
+            vt = asset.vulnerability_triage
+            risk = asset.combined_risk
+
+            defanged_mal = ", ".join(f"`{_defang_ioc(i)}`" for i in ti.malicious_iocs) or "Nenhum"
+            defanged_sus = ", ".join(f"`{_defang_ioc(i)}`" for i in ti.suspicious_iocs) or "Nenhum"
+            rules_str = ", ".join(f"`{r}`" for r in ti.matched_rules) or "Nenhuma"
+            mitre_str = ", ".join(f"`{m}`" for m in ti.mitre_techniques) or "Nenhuma"
+            cves_str = ", ".join(f"`{c}`" for c in vt.cves) or "Nenhum"
+
+            lines.extend(
+                [
+                    f"### `{asset.asset_id}` — Risco `{risk.risk_tier}`",
+                    "",
+                    f"- **Host / Responsável:** `{asset.host or 'N/A'}` / `{asset.owner or 'N/A'}`",
+                    f"- **Threat Intel:** veredito `{ti.highest_verdict}` | alertas: `{ti.alert_count}` | IOCs maliciosos: {defanged_mal} | IOCs suspeitos: {defanged_sus}",
+                    f"- **Detecção / MITRE:** regras {rules_str} | técnicas {mitre_str}",
+                    f"- **Vulnerabilidades:** total `{vt.finding_count}` | maior prioridade `{vt.highest_priority or 'N/A'}` (P0: {vt.p0_count}, P1: {vt.p1_count}, P2: {vt.p2_count}, P3: {vt.p3_count}) | CISA KEV: `{vt.cisa_kev_count}` | PCI-DSS: `{vt.pci_in_scope_count}`",
+                    f"- **CVEs associados:** {cves_str}",
+                    f"- **Justificativa:** {risk.rationale}",
+                    "",
+                ]
+            )
+
+    lines.extend(
+        [
+            "## Panorama Geral por Ativo",
+            "",
+        ]
+    )
+    if not report.assets:
+        lines.append("_Nenhum ativo registrado no relatório._")
+        lines.append("")
+    else:
+        lines.extend(
+            [
+                "| Asset ID | Risk Tier | Corroborado | Veredito TI | IOCs TI | Achados Vuln | Maior Prioridade | CISA KEV |",
+                "| :--- | :---: | :---: | :---: | ---: | ---: | :---: | ---: |",
+            ]
+        )
+        for asset in report.assets:
+            ti = asset.threat_intel
+            vt = asset.vulnerability_triage
+            corr_flag = "SIM" if asset.combined_risk.corroborated_exposure else "NAO"
+            lines.append(
+                f"| `{asset.asset_id}` | `{asset.combined_risk.risk_tier}` | {corr_flag} | "
+                f"`{ti.highest_verdict}` | {ti.ioc_count} | {vt.finding_count} | "
+                f"`{vt.highest_priority or '-'}` | {vt.cisa_kev_count} |"
+            )
+        lines.append("")
+
+    return "\n".join(lines)
+
+
 def save_correlation_report(report: CorrelationReport, output_path: str | Path) -> Path:
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -357,4 +451,11 @@ def save_correlation_report(report: CorrelationReport, output_path: str | Path) 
         json.dumps(report.model_dump(mode="json"), indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
+    return out
+
+
+def save_correlation_markdown(report: CorrelationReport, output_path: str | Path) -> Path:
+    out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(render_correlation_markdown(report), encoding="utf-8")
     return out
