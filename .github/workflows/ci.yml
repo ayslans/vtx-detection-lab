@@ -173,10 +173,38 @@ jobs:
           if [ ! -x "${TRIAGE_PY}" ]; then
             TRIAGE_PY="python3"
           fi
+          TRIVY_INPUT="${TRIAGE_REPO}/data/raw/trivy_scan.json"
+          if [ ! -s "${TRIVY_INPUT}" ]; then
+            TRIVY_INPUT="/tmp/ci_trivy_scan.json"
+            cat > "${TRIVY_INPUT}" << 'TRIVY_EOF'
+          {
+            "SchemaVersion": 2,
+            "ArtifactName": "api-pagamentos-prod",
+            "Results": [
+              {
+                "Target": "ghcr.io/ayslans/api-pagamentos:latest",
+                "Class": "os-pkgs",
+                "Type": "alpine",
+                "Vulnerabilities": [
+                  {
+                    "VulnerabilityID": "CVE-2024-3094",
+                    "PkgName": "xz-utils",
+                    "InstalledVersion": "5.6.0-r0",
+                    "FixedVersion": "5.6.1-r0",
+                    "Severity": "CRITICAL",
+                    "Title": "Malicious upstream compromise in xz-utils",
+                    "CVSS": {"nvd": {"V3Score": 10.0}}
+                  }
+                ]
+              }
+            ]
+          }
+          TRIVY_EOF
+          fi
           VIRTUAL_ENV="$(cd "${TRIAGE_REPO}" && pwd)/.venv" \
           PYTHONPATH="${TRIAGE_REPO}/src" \
           "${TRIAGE_PY}" -m vtx_vuln_triage.main \
-            --input "${TRIAGE_REPO}/data/raw/trivy_scan.json" \
+            --input "${TRIVY_INPUT}" \
             --policy "${TRIAGE_REPO}/config/pci_policy.yaml" \
             --assets "${TRIAGE_REPO}/examples/assets.yaml" \
             --asset-id api-pagamentos-prod \
