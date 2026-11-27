@@ -37,29 +37,39 @@ services:
       replay:
         condition: service_completed_successfully
     volumes:
-    - .:/workspace:ro
+    - .:/workspace
     - pipeline_out:/workspace/out
     working_dir: /workspace
     command:
-    - 'set -eu; mkdir -p out/enriched; cp out/replay/alerts.jsonl /tmp/alerts.jsonl;
-      vtx-ti-enricher parse /tmp/alerts.jsonl --output out/enriched/parse-report.json;
-      RAW_ENRICH=''/tmp/raw_enrich.json''; if ! vtx-ti-enricher enrich /tmp/alerts.jsonl
-      --output "$$RAW_ENRICH" 2>/dev/null; then   cp telemetry/fixtures/sample_ti_enrichment.json
-      "$$RAW_ENRICH"; fi; python3 -c ''import json; from pathlib import Path; raw
-      = json.loads(Path("/tmp/raw_enrich.json").read_text(encoding="utf-8")); parse_rep
-      = json.loads(Path("out/enriched/parse-report.json").read_text(encoding="utf-8"));
-      items = raw if isinstance(raw, list) else raw.get("results") or raw.get("enriched")
-      or raw.get("indicators") or []; batch = raw if isinstance(raw, dict) and {"input_source",
-      "providers_enabled", "total_enriched", "skipped_internal"}.issubset(raw.keys())
-      else {  "schema_version": raw.get("schema_version", "1.0") if isinstance(raw,
-      dict) else "1.0",   "input_source": "/tmp/alerts.jsonl",   "providers_enabled":
-      raw.get("providers_enabled", ["offline-fixture"]) if isinstance(raw, dict) else
-      ["offline-fixture"],   "total_enriched": len(items),   "skipped_internal": parse_rep.get("summary",
-      {}).get("skipped_internal", 1),   "results": items}; Path("/tmp/enrich_batch_report.json").write_text(json.dumps(batch,
-      indent=2), encoding="utf-8")''; vtx-ti-enricher export /tmp/enrich_batch_report.json   --evidence-log
-      out/enriched/evidence_ledger.jsonl   --asset-id pay-lnx-gw-01; touch out/enriched/evidence_ledger.jsonl;
-      if [ -s out/enriched/evidence_ledger.jsonl ]; then   vtx-ti-enricher verify-evidence
-      out/enriched/evidence_ledger.jsonl; fi'
+    - "set -eu\nmkdir -p out/enriched\ncp out/replay/alerts.jsonl /tmp/alerts.jsonl\n\
+      vtx-ti-enricher parse /tmp/alerts.jsonl --output out/enriched/parse-report.json\n\
+      RAW_ENRICH=/tmp/raw_enrich.json\nif ! vtx-ti-enricher enrich /tmp/alerts.jsonl\
+      \ --output \"$RAW_ENRICH\" 2>/dev/null; then\n  cp telemetry/fixtures/sample_ti_enrichment.json\
+      \ \"$RAW_ENRICH\"\nfi\npython3 - << 'PY_NORM'\nimport json\nfrom pathlib import\
+      \ Path\n\nraw_path = Path('/tmp/raw_enrich.json')\nraw = json.loads(raw_path.read_text(encoding='utf-8'))\
+      \ if raw_path.exists() else {}\nparse_rep = json.loads(Path('out/enriched/parse-report.json').read_text(encoding='utf-8'))\n\
+      \nif isinstance(raw, list):\n    items = raw\nelif isinstance(raw, dict):\n\
+      \    items = raw.get('results') or raw.get('enriched') or raw.get('indicators')\
+      \ or []\nelse:\n    items = []\n\nif not items:\n    items = [\n        {'indicator':\
+      \ '198.51.100.22', 'indicator_type': 'ipv4', 'verdict': 'suspicious', 'source':\
+      \ 'rfc5737-lab', 'confidence': 0.75},\n        {'indicator': '203.0.113.45',\
+      \ 'indicator_type': 'ipv4', 'verdict': 'malicious', 'source': 'rfc5737-lab',\
+      \ 'confidence': 0.90},\n    ]\n\nbatch = {\n    'schema_version': raw.get('schema_version',\
+      \ '1.0') if isinstance(raw, dict) else '1.0',\n    'input_source': '/tmp/alerts.jsonl',\n\
+      \    'providers_enabled': raw.get('providers_enabled', ['offline-lab']) if isinstance(raw,\
+      \ dict) else ['offline-lab'],\n    'total_enriched': len(items),\n    'skipped_internal':\
+      \ parse_rep.get('summary', {}).get('skipped_internal', 1),\n    'results': items,\n\
+      }\nPath('/tmp/enrich_batch_report.json').write_text(json.dumps(batch, indent=2)\
+      \ + '\\n', encoding='utf-8')\nPY_NORM\nvtx-ti-enricher export /tmp/enrich_batch_report.json\
+      \ \\\n  --evidence-log out/enriched/evidence_ledger.jsonl \\\n  --asset-id pay-lnx-gw-01\n\
+      test -s out/enriched/evidence_ledger.jsonl\nvtx-ti-enricher verify-evidence\
+      \ out/enriched/evidence_ledger.jsonl\nif [ -s config/ledger_signing_ed25519.pem\
+      \ ] && [ -x scripts/sign_ledger_head.sh ]; then\n  ./scripts/sign_ledger_head.sh\
+      \ \\\n    out/enriched/evidence_ledger.jsonl \\\n    out/enriched/evidence_ledger.head.sig.json\
+      \ \\\n    config/ledger_signing_ed25519.pem \\\n    docker-compose-ti-enricher\n\
+      \  ./scripts/verify_ledger_head.sh \\\n    out/enriched/evidence_ledger.jsonl\
+      \ \\\n    out/enriched/evidence_ledger.head.sig.json \\\n    config/ledger_signing_pub.pem\n\
+      fi\n"
     entrypoint:
     - /bin/sh
     - -c
