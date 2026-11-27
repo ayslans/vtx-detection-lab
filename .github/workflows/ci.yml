@@ -130,6 +130,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
+      - name: Checkout vtx-vuln-triage-ai for offline vulnerability triage
+        uses: actions/checkout@v7
+        with:
+          repository: ayslans/vtx-vuln-triage-ai
+          path: ../vtx-vuln-triage-ai
+
       - name: Set up Python 3.12
         uses: actions/setup-python@v7
         with:
@@ -160,10 +166,29 @@ jobs:
             --docker \
             --dry-run
 
+          mkdir -p out/triage
+          TRIAGE_REPO="../vtx-vuln-triage-ai"
+          TRIAGE_PY="${TRIAGE_REPO}/.venv/bin/python"
+          if [ ! -x "${TRIAGE_PY}" ]; then
+            TRIAGE_PY="python3"
+          fi
+          VIRTUAL_ENV="$(cd "${TRIAGE_REPO}" && pwd)/.venv" \
+          PYTHONPATH="${TRIAGE_REPO}/src" \
+          "${TRIAGE_PY}" -m vtx_vuln_triage.main \
+            --input "${TRIAGE_REPO}/data/raw/trivy_scan.json" \
+            --policy "${TRIAGE_REPO}/config/pci_policy.yaml" \
+            --assets "${TRIAGE_REPO}/examples/assets.yaml" \
+            --asset-id api-pagamentos-prod \
+            --criticality CDE \
+            --offline \
+            --output out/triage/real_triage_report.md \
+            --json-output out/triage/real_triage_report.json
+          test -s out/triage/real_triage_report.json
+
           CORRELATE_ARGS=(
             --ti-input telemetry/fixtures/sample_ti_enrichment.json
-            --triage-input telemetry/fixtures/sample_triage_report.json
-            --assets examples/assets.yaml
+            --triage-input out/triage/real_triage_report.json
+            --assets "${TRIAGE_REPO}/examples/assets.yaml"
             --output out/enriched/bridge_correlated_assets.json
             --md-output out/enriched/bridge_soc_summary.md
           )
