@@ -1,0 +1,129 @@
+services:
+  init-out:
+    image: alpine:3.20
+    user: 0:0
+    volumes:
+    - pipeline_out:/workspace/out
+    working_dir: /workspace
+    command:
+    - sh
+    - -c
+    - mkdir -p /workspace/out/replay /workspace/out/enriched /workspace/out/triage
+      && chmod -R 0777 /workspace/out
+  replay:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: vtx-detection-lab:pipeline
+    working_dir: /workspace
+    volumes:
+    - .:/workspace
+    - pipeline_out:/workspace/out
+    command:
+    - set -eu; mkdir -p out/replay; python -m vtx_detection_lab.main replay --output
+      out/replay/alerts.jsonl 2>/dev/null || python -m vtx_detection_lab.main replay
+      --out out/replay/alerts.jsonl 2>/dev/null || python -m vtx_detection_lab.main
+      replay; if [ ! -s out/replay/alerts.jsonl ] && [ -s out/alerts.jsonl ]; then
+      cp out/alerts.jsonl out/replay/alerts.jsonl; fi; test -s out/replay/alerts.jsonl
+    entrypoint:
+    - /bin/sh
+    - -c
+    depends_on:
+      init-out:
+        condition: service_completed_successfully
+  ti-enricher:
+    image: ghcr.io/ayslans/vtx-ti-enricher:0.2.0
+    depends_on:
+      replay:
+        condition: service_completed_successfully
+    volumes:
+    - .:/workspace:ro
+    - pipeline_out:/workspace/out
+    working_dir: /workspace
+    command:
+    - 'set -eu; mkdir -p out/enriched; cp out/replay/alerts.jsonl /tmp/alerts.jsonl;
+      vtx-ti-enricher parse /tmp/alerts.jsonl --output out/enriched/parse-report.json;
+      RAW_ENRICH=''/tmp/raw_enrich.json''; if ! vtx-ti-enricher enrich /tmp/alerts.jsonl
+      --output "$$RAW_ENRICH" 2>/dev/null; then   cp telemetry/fixtures/sample_ti_enrichment.json
+      "$$RAW_ENRICH"; fi; python3 -c ''import json; from pathlib import Path; raw
+      = json.loads(Path("/tmp/raw_enrich.json").read_text(encoding="utf-8")); parse_rep
+      = json.loads(Path("out/enriched/parse-report.json").read_text(encoding="utf-8"));
+      items = raw if isinstance(raw, list) else raw.get("results") or raw.get("enriched")
+      or raw.get("indicators") or []; batch = raw if isinstance(raw, dict) and {"input_source",
+      "providers_enabled", "total_enriched", "skipped_internal"}.issubset(raw.keys())
+      else {  "schema_version": raw.get("schema_version", "1.0") if isinstance(raw,
+      dict) else "1.0",   "input_source": "/tmp/alerts.jsonl",   "providers_enabled":
+      raw.get("providers_enabled", ["offline-fixture"]) if isinstance(raw, dict) else
+      ["offline-fixture"],   "total_enriched": len(items),   "skipped_internal": parse_rep.get("summary",
+      {}).get("skipped_internal", 1),   "results": items}; Path("/tmp/enrich_batch_report.json").write_text(json.dumps(batch,
+      indent=2), encoding="utf-8")''; vtx-ti-enricher export /tmp/enrich_batch_report.json   --evidence-log
+      out/enriched/evidence_ledger.jsonl   --asset-id pay-lnx-gw-01; touch out/enriched/evidence_ledger.jsonl;
+      if [ -s out/enriched/evidence_ledger.jsonl ]; then   vtx-ti-enricher verify-evidence
+      out/enriched/evidence_ledger.jsonl; fi'
+    entrypoint:
+    - /bin/sh
+    - -c
+  vuln-triage:
+    build:
+      context: vendor/vtx-vuln-triage-ai
+    image: vtx-vuln-triage-ai:pipeline
+    depends_on:
+      ti-enricher:
+        condition: service_completed_successfully
+    volumes:
+    - ./vendor/vtx-vuln-triage-ai:/triage:ro
+    - pipeline_out:/workspace/out
+    working_dir: /workspace
+    command:
+    - "set -eu\nmkdir -p out/triage\nTRIVY_INPUT=\"/triage/data/raw/trivy_scan.json\"\
+      \nif [ ! -s \"$$TRIVY_INPUT\" ]; then\n  TRIVY_INPUT=\"/tmp/ci_trivy_scan.json\"\
+      \n  cat > \"$$TRIVY_INPUT\" << 'TRIVY_EOF'\n{\n  \"SchemaVersion\": 2,\n  \"\
+      ArtifactName\": \"api-pagamentos-prod\",\n  \"Results\": [\n    {\n      \"\
+      Target\": \"ghcr.io/ayslans/api-pagamentos:latest\",\n      \"Class\": \"os-pkgs\"\
+      ,\n      \"Type\": \"alpine\",\n      \"Vulnerabilities\": [\n        {\n  \
+      \        \"VulnerabilityID\": \"CVE-2024-3094\",\n          \"PkgName\": \"\
+      xz-utils\",\n          \"InstalledVersion\": \"5.6.0-r0\",\n          \"FixedVersion\"\
+      : \"5.6.1-r0\",\n          \"Severity\": \"CRITICAL\",\n          \"Title\"\
+      : \"Malicious upstream compromise in xz-utils\",\n          \"CVSS\": {\"nvd\"\
+      : {\"V3Score\": 10.0}}\n        }\n      ]\n    }\n  ]\n}\nTRIVY_EOF\nfi\nPYTHONPATH=\"\
+      /triage/src\" \\\npython -m vtx_vuln_triage.main \\\n  --input \"$$TRIVY_INPUT\"\
+      \ \\\n  --policy /triage/config/pci_policy.yaml \\\n  --assets /triage/examples/assets.yaml\
+      \ \\\n  --asset-id api-pagamentos-prod \\\n  --criticality CDE \\\n  --offline\
+      \ \\\n  --output out/triage/real_triage_report.md \\\n  --json-output out/triage/real_triage_report.json\n\
+      test -s out/triage/real_triage_report.json\n"
+    entrypoint:
+    - /bin/sh
+    - -c
+  correlate:
+    image: vtx-detection-lab:pipeline
+    pull_policy: never
+    depends_on:
+      replay:
+        condition: service_completed_successfully
+      vuln-triage:
+        condition: service_completed_successfully
+    environment:
+    - VTX_LEDGER_SIGNING_KEY_PATH=/workspace/config/ledger_signing_ed25519.pem
+    - VTX_LEDGER_SIGNER_ID=docker-compose-pipeline
+    volumes:
+    - .:/workspace
+    - pipeline_out:/workspace/out
+    working_dir: /workspace
+    command:
+    - "set -eu\nif [ -s out/enriched/evidence_ledger.jsonl ] && [ -x scripts/sign_ledger_head.sh\
+      \ ]; then\n  ./scripts/sign_ledger_head.sh \\\n    out/enriched/evidence_ledger.jsonl\
+      \ \\\n    out/enriched/evidence_ledger.head.sig.json \\\n    config/ledger_signing_ed25519.pem\
+      \ \\\n    docker-compose-pipeline\n  ./scripts/verify_ledger_head.sh \\\n  \
+      \  out/enriched/evidence_ledger.jsonl \\\n    out/enriched/evidence_ledger.head.sig.json\
+      \ \\\n    config/ledger_signing_pub.pem\nfi\npython -m vtx_detection_lab.main\
+      \ correlate \\\n  --ti-input telemetry/fixtures/sample_ti_enrichment.json \\\
+      \n  --triage-input out/triage/real_triage_report.json \\\n  --assets vendor/vtx-vuln-triage-ai/examples/assets.yaml\
+      \ \\\n  --evidence-log out/enriched/evidence_ledger.jsonl \\\n  --verify-evidence-chain\
+      \ \\\n  --output out/enriched/bridge_correlated_assets.json \\\n  --md-output\
+      \ out/enriched/bridge_soc_summary.md\ntest -s out/enriched/bridge_correlated_assets.json\n\
+      test -s out/enriched/bridge_soc_summary.md\n"
+    entrypoint:
+    - /bin/sh
+    - -c
+volumes:
+  pipeline_out: null
