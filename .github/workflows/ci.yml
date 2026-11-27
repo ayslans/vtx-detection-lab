@@ -95,6 +95,9 @@ jobs:
             --md-output artifacts/correlation/correlated_soc_summary.md
           test -s artifacts/correlation/correlated_assets.json
           test -s artifacts/correlation/correlated_soc_summary.md
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            cat artifacts/correlation/correlated_soc_summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Upload SOC correlation artifacts (JSON + Markdown)
         uses: actions/upload-artifact@v7
