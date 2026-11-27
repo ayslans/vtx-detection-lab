@@ -85,6 +85,8 @@ jobs:
             --strict
 
       - name: Correlate TI enrichment and vulnerability triage by asset_id
+        env:
+          MATRIX_PY_VER: ${{ matrix.python-version }}
         run: |
           mkdir -p artifacts/correlation
           python -m vtx_detection_lab.main correlate \
@@ -95,7 +97,7 @@ jobs:
             --md-output artifacts/correlation/correlated_soc_summary.md
           test -s artifacts/correlation/correlated_assets.json
           test -s artifacts/correlation/correlated_soc_summary.md
-          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+          if [ "${MATRIX_PY_VER}" = "3.12" ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
             cat artifacts/correlation/correlated_soc_summary.md >> "$GITHUB_STEP_SUMMARY"
           fi
 
