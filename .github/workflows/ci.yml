@@ -134,7 +134,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: ayslans/vtx-vuln-triage-ai
-          path: ../vtx-vuln-triage-ai
+          path: vendor/vtx-vuln-triage-ai
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v7
@@ -167,7 +167,7 @@ jobs:
             --dry-run
 
           mkdir -p out/triage
-          TRIAGE_REPO="../vtx-vuln-triage-ai"
+          TRIAGE_REPO="vendor/vtx-vuln-triage-ai"
           TRIAGE_PY="${TRIAGE_REPO}/.venv/bin/python"
           if [ ! -x "${TRIAGE_PY}" ]; then
             TRIAGE_PY="python3"
