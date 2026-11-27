@@ -16,6 +16,8 @@ from vtx_detection_lab.assets import (
 
 RiskTier = Literal["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]
 
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
 _VERDICT_RANK: dict[str, int] = {
     "unknown": 0,
     "benign": 1,
@@ -47,6 +49,7 @@ class ThreatIntelAssetSummary(BaseModel):
     suspicious_iocs: list[str] = Field(default_factory=list)
     matched_rules: list[str] = Field(default_factory=list)
     mitre_techniques: list[str] = Field(default_factory=list)
+    evidence_entry_hashes: list[str] = Field(default_factory=list)
 
 
 class VulnerabilityAssetSummary(BaseModel):
@@ -144,6 +147,26 @@ def _extract_indicator_and_verdict(item: dict[str, Any]) -> tuple[Optional[str],
     return None, verdict
 
 
+def _extract_entry_hashes(item: dict[str, Any]) -> list[str]:
+    candidates: list[str] = []
+    for key in ("entry_hash", "evidence_entry_hash"):
+        val = item.get(key)
+        if isinstance(val, str):
+            candidates.append(val)
+
+    for key in ("evidence_entry_hashes", "entry_hashes"):
+        val = item.get(key)
+        if isinstance(val, list):
+            candidates.extend(v for v in val if isinstance(v, str))
+
+    valid: list[str] = []
+    for raw in candidates:
+        cleaned = raw.strip().lower()
+        if _SHA256_RE.match(cleaned):
+            valid.append(cleaned)
+    return valid
+
+
 def _defang_ioc(value: str) -> str:
     defanged = re.sub(r"(?i)^https://", "hxxps://", value.strip())
     defanged = re.sub(r"(?i)^http://", "hxxp://", defanged)
@@ -206,6 +229,7 @@ def correlate_ti_and_triage(
     ti_paths: list[str | Path],
     triage_paths: list[str | Path],
     asset_inventory: Optional[AssetInventory] = None,
+    evidence_paths: Optional[list[str | Path]] = None,
 ) -> CorrelationReport:
     records_by_asset: dict[str, ConsolidatedAssetContext] = {}
     sets_by_asset: dict[str, dict[str, set[str]]] = {}
@@ -226,6 +250,7 @@ def correlate_ti_and_triage(
                 "sus_iocs": set(),
                 "rules": set(),
                 "mitre": set(),
+                "evidence_hashes": set(),
                 "cves": set(),
                 "fids": set(),
             }
@@ -236,7 +261,9 @@ def correlate_ti_and_triage(
             ctx.owner = owner
         return ctx
 
-    for tpath in ti_paths:
+    combined_ti_sources = [*ti_paths, *(evidence_paths or [])]
+
+    for tpath in combined_ti_sources:
         for doc in _load_json_records(tpath):
             top_candidate = (
                 doc.get("asset_id") or (doc.get("asset") or {}).get("asset_id")
@@ -248,6 +275,8 @@ def correlate_ti_and_triage(
                 doc.get("host"),
                 asset_inventory,
             )
+            doc_hashes = _extract_entry_hashes(doc)
+
             for item in _extract_ti_items(doc):
                 aid = _normalize_asset_id(
                     item.get("asset_id") or top_aid,
@@ -265,6 +294,9 @@ def correlate_ti_and_triage(
                     tech = str(item["mitre_technique"]).strip().upper()
                     if re.match(r"^T\d{4}(\.\d{3})?$", tech):
                         s["mitre"].add(tech)
+
+                for h in (*doc_hashes, *_extract_entry_hashes(item)):
+                    s["evidence_hashes"].add(h)
 
                 indicator, verdict = _extract_indicator_and_verdict(item)
                 if indicator:
@@ -347,6 +379,7 @@ def correlate_ti_and_triage(
         ti.ioc_count = len(ti.malicious_iocs) + len(ti.suspicious_iocs)
         ti.matched_rules = sorted(s["rules"])
         ti.mitre_techniques = sorted(s["mitre"])
+        ti.evidence_entry_hashes = sorted(s["evidence_hashes"])
 
         vt.cves = sorted(s["cves"])
         vt.finding_ids = sorted(s["fids"])
@@ -398,6 +431,7 @@ def render_correlation_markdown(report: CorrelationReport) -> str:
             defanged_sus = ", ".join(f"`{_defang_ioc(i)}`" for i in ti.suspicious_iocs) or "Nenhum"
             rules_str = ", ".join(f"`{r}`" for r in ti.matched_rules) or "Nenhuma"
             mitre_str = ", ".join(f"`{m}`" for m in ti.mitre_techniques) or "Nenhuma"
+            hashes_str = ", ".join(f"`{h}`" for h in ti.evidence_entry_hashes) or "Nenhum"
             cves_str = ", ".join(f"`{c}`" for c in vt.cves) or "Nenhum"
 
             lines.extend(
@@ -407,6 +441,7 @@ def render_correlation_markdown(report: CorrelationReport) -> str:
                     f"- **Host / Responsável:** `{asset.host or 'N/A'}` / `{asset.owner or 'N/A'}`",
                     f"- **Threat Intel:** veredito `{ti.highest_verdict}` | alertas: `{ti.alert_count}` | IOCs maliciosos: {defanged_mal} | IOCs suspeitos: {defanged_sus}",
                     f"- **Detecção / MITRE:** regras {rules_str} | técnicas {mitre_str}",
+                    f"- **Evidência SHA-256 (`entry_hash`):** {hashes_str}",
                     f"- **Vulnerabilidades:** total `{vt.finding_count}` | maior prioridade `{vt.highest_priority or 'N/A'}` (P0: {vt.p0_count}, P1: {vt.p1_count}, P2: {vt.p2_count}, P3: {vt.p3_count}) | CISA KEV: `{vt.cisa_kev_count}` | PCI-DSS: `{vt.pci_in_scope_count}`",
                     f"- **CVEs associados:** {cves_str}",
                     f"- **Justificativa:** {risk.rationale}",
@@ -426,18 +461,24 @@ def render_correlation_markdown(report: CorrelationReport) -> str:
     else:
         lines.extend(
             [
-                "| Asset ID | Risk Tier | Corroborado | Veredito TI | IOCs TI | Achados Vuln | Maior Prioridade | CISA KEV |",
-                "| :--- | :---: | :---: | :---: | ---: | ---: | :---: | ---: |",
+                "| Asset ID | Risk Tier | Corroborado | Veredito TI | IOCs TI | Achados Vuln | Maior Prioridade | CISA KEV | Evidência SHA-256 |",
+                "| :--- | :---: | :---: | :---: | ---: | ---: | :---: | ---: | :--- |",
             ]
         )
         for asset in report.assets:
             ti = asset.threat_intel
             vt = asset.vulnerability_triage
             corr_flag = "SIM" if asset.combined_risk.corroborated_exposure else "NAO"
+            if ti.evidence_entry_hashes:
+                short_hashes = ", ".join(f"`{h[:12]}`" for h in ti.evidence_entry_hashes[:2])
+                if len(ti.evidence_entry_hashes) > 2:
+                    short_hashes += f" (+{len(ti.evidence_entry_hashes) - 2})"
+            else:
+                short_hashes = "-"
             lines.append(
                 f"| `{asset.asset_id}` | `{asset.combined_risk.risk_tier}` | {corr_flag} | "
                 f"`{ti.highest_verdict}` | {ti.ioc_count} | {vt.finding_count} | "
-                f"`{vt.highest_priority or '-'}` | {vt.cisa_kev_count} |"
+                f"`{vt.highest_priority or '-'}` | {vt.cisa_kev_count} | {short_hashes} |"
             )
         lines.append("")
 

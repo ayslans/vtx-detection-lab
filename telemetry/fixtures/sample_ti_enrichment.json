@@ -8,7 +8,8 @@
       "rule_id": "VTX-1005",
       "mitre_technique": "T1190",
       "indicator": "203.0.113.42",
-      "verdict": "malicious"
+      "verdict": "malicious",
+      "entry_hash": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
     },
     {
       "asset_id": "cde-app-win-01",
@@ -16,7 +17,8 @@
       "rule_id": "VTX-1001",
       "mitre_technique": "T1059.001",
       "indicator": "198.51.100.7",
-      "verdict": "suspicious"
+      "verdict": "suspicious",
+      "entry_hash": "4b227777d4dd1fc61c6f884f48641d02b4d121d3fd328cb08b5531fcacdabf8a"
     }
   ]
 }

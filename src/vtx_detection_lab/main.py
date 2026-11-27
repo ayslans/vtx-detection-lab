@@ -241,6 +241,11 @@ def correlate_assets(
         "--triage-input",
         help="Caminho(s) do contrato JSON (TriageJsonReport v1.0) do vtx-vuln-triage-ai.",
     ),
+    evidence_log: Optional[list[Path]] = typer.Option(
+        None,
+        "--evidence-log",
+        help="Caminho(s) opcional(is) do ledger JSONL SHA-256 (vtx-ti-enricher) para propagar entry_hash por asset_id.",
+    ),
     output: Path = typer.Option(
         Path("artifacts/correlated_assets.json"),
         "--output",
@@ -265,12 +270,13 @@ def correlate_assets(
         help="Retorna código 1 se algum ativo tiver exposição corroborada (TI + vulnerabilidade).",
     ),
 ) -> None:
-    """Consolida alertas enriquecidos (TI) e triagem de vulnerabilidades por asset_id."""
+    """Consolida alertas enriquecidos (TI), evidências SHA-256 e triagem de vulnerabilidades por asset_id."""
     inventory = _load_inventory_safe(assets)
     report = correlate_ti_and_triage(
         ti_paths=ti_input,
         triage_paths=triage_input,
         asset_inventory=inventory,
+        evidence_paths=evidence_log,
     )
     saved = save_correlation_report(report, output)
 

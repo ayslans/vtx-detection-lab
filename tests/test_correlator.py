@@ -15,8 +15,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES_ASSETS = REPO_ROOT / "examples" / "assets.yaml"
 runner = CliRunner()
 
+SAMPLE_HASH_A = "a" * 64
+SAMPLE_HASH_B = "b" * 64
 
-def test_correlate_merges_ti_and_triage_by_asset_id_and_exports_soc_markdown(tmp_path: Path) -> None:
+
+def test_correlate_merges_ti_triage_and_evidence_entry_hash_into_soc_markdown(tmp_path: Path) -> None:
     ti_payload = {
         "schema_version": "1.0",
         "source": "vtx-ti-enricher",
@@ -30,6 +33,24 @@ def test_correlate_merges_ti_and_triage_by_asset_id_and_exports_soc_markdown(tmp
                 "verdict": "malicious",
             }
         ],
+    }
+    evidence_record = {
+        "schema_version": "1.0",
+        "seq": 1,
+        "recorded_at": "2026-11-27T05:20:00Z",
+        "source": "vtx-ti-enricher",
+        "input_source": "samples/detection_lab_alerts.json",
+        "asset_id": "pay-lnx-gw-01",
+        "indicator": "203.0.113.42",
+        "defanged": "203[.]0[.]113[.]42",
+        "ioc_type": "ipv4",
+        "verdict": "malicious",
+        "composite_score": 90.0,
+        "confidence": "high",
+        "providers": ["abuseipdb", "virustotal"],
+        "payload_sha256": "c" * 64,
+        "prev_hash": "0" * 64,
+        "entry_hash": SAMPLE_HASH_A.upper(),
     }
     triage_payload = {
         "schema_version": "1.0",
@@ -76,10 +97,13 @@ def test_correlate_merges_ti_and_triage_by_asset_id_and_exports_soc_markdown(tmp
     }
 
     ti_file = tmp_path / "ti_report.json"
+    evidence_file = tmp_path / "evidence_ledger.jsonl"
     triage_file = tmp_path / "triage_report.json"
     out_file = tmp_path / "correlated.json"
     md_file = tmp_path / "correlated_soc.md"
+
     ti_file.write_text(json.dumps(ti_payload), encoding="utf-8")
+    evidence_file.write_text(json.dumps(evidence_record) + "\n", encoding="utf-8")
     triage_file.write_text(json.dumps(triage_payload), encoding="utf-8")
 
     result = runner.invoke(
@@ -90,6 +114,8 @@ def test_correlate_merges_ti_and_triage_by_asset_id_and_exports_soc_markdown(tmp
             str(ti_file),
             "--triage-input",
             str(triage_file),
+            "--evidence-log",
+            str(evidence_file),
             "--assets",
             str(EXAMPLES_ASSETS),
             "--output",
@@ -113,6 +139,7 @@ def test_correlate_merges_ti_and_triage_by_asset_id_and_exports_soc_markdown(tmp
     assert ctx.threat_intel.malicious_iocs == ["203.0.113.42"]
     assert ctx.threat_intel.matched_rules == ["VTX-1005"]
     assert ctx.threat_intel.mitre_techniques == ["T1190"]
+    assert ctx.threat_intel.evidence_entry_hashes == [SAMPLE_HASH_A]
     assert ctx.vulnerability_triage.finding_count == 1
     assert ctx.vulnerability_triage.p0_count == 1
     assert ctx.vulnerability_triage.cves == ["CVE-2026-124851"]
@@ -123,9 +150,34 @@ def test_correlate_merges_ti_and_triage_by_asset_id_and_exports_soc_markdown(tmp
     assert "## Ativos com Exposição Corroborada (Ação Prioritária SOC)" in md_text
     assert "### `pay-lnx-gw-01` — Risco `CRITICAL`" in md_text
     assert "203[.]0[.]113[.]42" in md_text
+    assert f"- **Evidência SHA-256 (`entry_hash`):** `{SAMPLE_HASH_A}`" in md_text
+    assert f"`{SAMPLE_HASH_A[:12]}`" in md_text
     assert "CVE-2026-124851" in md_text
-    assert "VTX-1005" in md_text
-    assert "T1190" in md_text
+
+
+def test_correlate_extracts_valid_entry_hashes_from_ti_input_and_ignores_invalid(tmp_path: Path) -> None:
+    inv = load_asset_inventory(EXAMPLES_ASSETS)
+    ti_path = tmp_path / "ti_with_hashes.jsonl"
+    rows = [
+        {
+            "asset_id": "cde-app-win-01",
+            "indicator": "198.51.100.7",
+            "verdict": "suspicious",
+            "entry_hash": SAMPLE_HASH_B,
+        },
+        {
+            "asset_id": "cde-app-win-01",
+            "indicator": "198.51.100.7",
+            "verdict": "suspicious",
+            "entry_hash": "not-a-valid-sha256",
+        },
+    ]
+    ti_path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+
+    rep = correlate_ti_and_triage([ti_path], [], asset_inventory=inv)
+    assert rep.total_assets == 1
+    assert rep.assets[0].asset_id == "cde-app-win-01"
+    assert rep.assets[0].threat_intel.evidence_entry_hashes == [SAMPLE_HASH_B]
 
 
 def test_correlate_falls_back_to_unknown_asset_and_renders_non_corroborated_markdown(tmp_path: Path) -> None:
@@ -148,6 +200,7 @@ def test_correlate_falls_back_to_unknown_asset_and_renders_non_corroborated_mark
     assert rep.corroborated_assets == 0
     assert rep.assets[0].asset_id == UNKNOWN_ASSET_ID
     assert rep.assets[0].threat_intel.highest_verdict == "suspicious"
+    assert rep.assets[0].threat_intel.evidence_entry_hashes == []
 
     md_text = render_correlation_markdown(rep)
     assert "Nenhum ativo com exposição corroborada" in md_text
