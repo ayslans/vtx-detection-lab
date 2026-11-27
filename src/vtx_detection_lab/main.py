@@ -1,14 +1,22 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Optional
 
 import typer
+import yaml
 from rich.console import Console
 from rich.table import Table
 
+from vtx_detection_lab.assets import (
+    UNKNOWN_ASSET_ID,
+    AssetInventory,
+    load_asset_inventory,
+)
 from vtx_detection_lab.engine.evaluator import (
     evaluate_telemetry,
     load_telemetry_events,
+    save_alerts_jsonl,
 )
 from vtx_detection_lab.parsers.rule_loader import (
     load_rules_from_dir,
@@ -86,6 +94,17 @@ def replay_telemetry(
         "-o",
         help="Caminho de saída do relatório Markdown.",
     ),
+    assets: Optional[Path] = typer.Option(
+        None,
+        "--assets",
+        "-a",
+        help="Catálogo YAML de inventário para mapear host -> asset_id (ex: examples/assets.yaml).",
+    ),
+    alerts_jsonl: Optional[Path] = typer.Option(
+        None,
+        "--alerts-jsonl",
+        help="Caminho opcional para exportar alertas disparados em formato JSONL.",
+    ),
     strict: bool = typer.Option(
         False,
         "--strict",
@@ -97,9 +116,23 @@ def replay_telemetry(
     wazuh_rules = parse_wazuh_rules_xml(wazuh_xml) if wazuh_xml.exists() else []
     events = load_telemetry_events(telemetry)
 
-    summary = evaluate_telemetry(events, rules)
+    inventory: Optional[AssetInventory] = None
+    if assets is not None:
+        try:
+            inventory = load_asset_inventory(assets)
+        except (OSError, ValueError, yaml.YAMLError) as exc:
+            console.print(
+                f"[yellow]Aviso de inventário:[/yellow] falha ao carregar '{assets}' ({exc}); "
+                f"aplicando fallback '{UNKNOWN_ASSET_ID}'."
+            )
+
+    summary = evaluate_telemetry(events, rules, asset_inventory=inventory)
     report_md = render_detection_report(rules, summary, wazuh_rules=wazuh_rules)
     saved_path = save_markdown_report(report_md, output)
+
+    if alerts_jsonl is not None:
+        saved_jsonl = save_alerts_jsonl(summary.alerts, alerts_jsonl)
+        console.print(f"[green]Alertas JSONL exportados em:[/green] {saved_jsonl}")
 
     table = Table(title="vtx-detection-lab — Replay Summary")
     table.add_column("Métrica", style="cyan")

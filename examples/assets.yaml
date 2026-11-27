@@ -1,0 +1,48 @@
+version: '1'
+assets:
+- asset_id: cde-app-win-01
+  name: Servidor de Aplicação CDE Windows
+  owner: squad-pagamentos@empresa.local
+  environment: prod
+  exposure: internal
+  criticality: critical
+  hosts:
+  - CDE-APP-WIN-01
+  tags:
+  - pci-dss
+  - cde
+  - windows
+- asset_id: pay-lnx-gw-01
+  name: Gateway de Pagamentos Linux
+  owner: squad-pagamentos@empresa.local
+  environment: prod
+  exposure: internet
+  criticality: critical
+  hosts:
+  - PAY-LNX-GW-01
+  tags:
+  - pci-dss
+  - gateway
+  - linux
+- asset_id: fin-wkstn-01
+  name: Estação Financeiro 01
+  owner: squad-financeiro@empresa.local
+  environment: prod
+  exposure: internal
+  criticality: high
+  hosts:
+  - FIN-WKSTN-01
+  tags:
+  - finance
+  - workstation
+- asset_id: fin-wkstn-02
+  name: Estação Financeiro 02
+  owner: squad-financeiro@empresa.local
+  environment: prod
+  exposure: internal
+  criticality: high
+  hosts:
+  - FIN-WKSTN-02
+  tags:
+  - finance
+  - workstation

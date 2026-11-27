@@ -6,6 +6,8 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
+from vtx_detection_lab.assets import UNKNOWN_ASSET_ID
+
 MITRE_TECHNIQUE_RE = re.compile(r"^T\d{4}(\.\d{3})?$")
 
 
@@ -59,9 +61,11 @@ class TelemetryEvent(BaseModel):
     log_source: LogSource
     payload: dict[str, Any]
     expected_rule_id: Optional[str] = None
+    asset_id: Optional[str] = None
 
 
 class AlertMatch(BaseModel):
+    source: str = "vtx-detection-lab"
     rule_id: str
     rule_title: str
     severity: Severity
@@ -69,5 +73,7 @@ class AlertMatch(BaseModel):
     mitre_technique: str
     event_id: str
     host: str
+    asset_id: str = UNKNOWN_ASSET_ID
     timestamp: str
     matched_fields: dict[str, Any] = Field(default_factory=dict)
+    event_payload: dict[str, Any] = Field(default_factory=dict)

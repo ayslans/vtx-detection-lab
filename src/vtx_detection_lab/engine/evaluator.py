@@ -3,10 +3,11 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
+from vtx_detection_lab.assets import AssetInventory, resolve_asset_id
 from vtx_detection_lab.models import (
     AlertMatch,
     DetectionCondition,
@@ -72,9 +73,18 @@ def _condition_matches(condition: DetectionCondition, payload: dict[str, Any]) -
     return True
 
 
-def evaluate_event(event: TelemetryEvent, rules: list[DetectionRule]) -> list[AlertMatch]:
+def evaluate_event(
+    event: TelemetryEvent,
+    rules: list[DetectionRule],
+    asset_inventory: Optional[AssetInventory] = None,
+) -> list[AlertMatch]:
     """Avalia um único evento de telemetria contra todas as regras do catálogo."""
     matches: list[AlertMatch] = []
+    resolved_asset_id = resolve_asset_id(
+        host=event.host,
+        inventory=asset_inventory,
+        explicit_asset_id=event.asset_id,
+    )
 
     for rule in rules:
         if rule.log_source != event.log_source:
@@ -95,8 +105,10 @@ def evaluate_event(event: TelemetryEvent, rules: list[DetectionRule]) -> list[Al
                     mitre_technique=rule.mitre_technique,
                     event_id=event.event_id,
                     host=event.host,
+                    asset_id=resolved_asset_id,
                     timestamp=event.timestamp,
                     matched_fields=matched_fields,
+                    event_payload=dict(event.payload),
                 )
             )
 
@@ -106,6 +118,7 @@ def evaluate_event(event: TelemetryEvent, rules: list[DetectionRule]) -> list[Al
 def evaluate_telemetry(
     events: list[TelemetryEvent],
     rules: list[DetectionRule],
+    asset_inventory: Optional[AssetInventory] = None,
 ) -> ReplaySummary:
     """Executa replay completo calculando métricas de qualidade (TP, TN, FP, FN, Precision, Recall)."""
     all_alerts: list[AlertMatch] = []
@@ -115,7 +128,7 @@ def evaluate_telemetry(
     tp = tn = fp = fn = 0
 
     for event in events:
-        event_alerts = evaluate_event(event, rules)
+        event_alerts = evaluate_event(event, rules, asset_inventory=asset_inventory)
         all_alerts.extend(event_alerts)
         fired_ids = {alert.rule_id for alert in event_alerts}
 
@@ -153,3 +166,15 @@ def evaluate_telemetry(
         missed_event_ids=missed_event_ids,
         unexpected_alerts=unexpected_alerts,
     )
+
+
+def save_alerts_jsonl(alerts: list[AlertMatch], output_path: str | Path) -> Path:
+    """Exporta alertas disparados em formato JSONL (1 alerta por linha) com asset_id."""
+    out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        json.dumps(alert.model_dump(mode="json"), ensure_ascii=False)
+        for alert in alerts
+    ]
+    out.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+    return out
