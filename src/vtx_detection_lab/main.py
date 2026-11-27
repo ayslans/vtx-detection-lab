@@ -13,6 +13,10 @@ from vtx_detection_lab.assets import (
     AssetInventory,
     load_asset_inventory,
 )
+from vtx_detection_lab.correlator import (
+    correlate_ti_and_triage,
+    save_correlation_report,
+)
 from vtx_detection_lab.engine.evaluator import (
     evaluate_telemetry,
     load_telemetry_events,
@@ -221,6 +225,59 @@ def replay_telemetry(
 
     if strict and (summary.false_positives > 0 or summary.false_negatives > 0):
         console.print("[bold red]Quality Gate reprovado (--strict): existem FPs ou FNs.[/bold red]")
+        raise typer.Exit(code=1)
+
+
+@app.command("correlate")
+def correlate_assets(
+    ti_input: list[Path] = typer.Option(
+        ...,
+        "--ti-input",
+        help="Caminho(s) de saída JSON/JSONL do vtx-ti-enricher ou alertas com asset_id.",
+    ),
+    triage_input: list[Path] = typer.Option(
+        ...,
+        "--triage-input",
+        help="Caminho(s) do contrato JSON (TriageJsonReport v1.0) do vtx-vuln-triage-ai.",
+    ),
+    output: Path = typer.Option(
+        Path("artifacts/correlated_assets.json"),
+        "--output",
+        "-o",
+        help="Caminho do relatório JSON consolidado por asset_id.",
+    ),
+    assets: Optional[Path] = typer.Option(
+        None,
+        "--assets",
+        "-a",
+        help="Catálogo YAML opcional de inventário para resolver hosts sem asset_id.",
+    ),
+    fail_on_corroborated: bool = typer.Option(
+        False,
+        "--fail-on-corroborated",
+        help="Retorna código 1 se algum ativo tiver exposição corroborada (TI + vulnerabilidade).",
+    ),
+) -> None:
+    """Consolida alertas enriquecidos (TI) e triagem de vulnerabilidades por asset_id."""
+    inventory = _load_inventory_safe(assets)
+    report = correlate_ti_and_triage(
+        ti_paths=ti_input,
+        triage_paths=triage_input,
+        asset_inventory=inventory,
+    )
+    saved = save_correlation_report(report, output)
+
+    table = Table(title="vtx-detection-lab — Asset Correlation Summary")
+    table.add_column("Métrica", style="cyan")
+    table.add_column("Resultado", justify="right", style="bold")
+    table.add_row("Ativos consolidados", str(report.total_assets))
+    table.add_row("Exposição corroborada (TI + Vuln)", str(report.corroborated_assets))
+    table.add_row("Ativos CRITICAL", str(report.critical_assets))
+    console.print(table)
+    console.print(f"[green]Relatório consolidado salvo em:[/green] {saved}")
+
+    if fail_on_corroborated and report.corroborated_assets > 0:
+        console.print("[bold red]Exposição corroborada detectada em um ou mais ativos.[/bold red]")
         raise typer.Exit(code=1)
 
 
