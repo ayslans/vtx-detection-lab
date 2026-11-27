@@ -23,6 +23,8 @@ class LogSource(str, Enum):
     LINUX_AUTH = "linux_auth"
     AUDITD = "auditd"
     WAZUH = "wazuh"
+    NGINX = "nginx"
+    FASTAPI = "fastapi"
 
 
 class DetectionCondition(BaseModel):

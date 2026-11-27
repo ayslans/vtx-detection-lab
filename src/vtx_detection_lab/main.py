@@ -18,6 +18,11 @@ from vtx_detection_lab.engine.evaluator import (
     load_telemetry_events,
     save_alerts_jsonl,
 )
+from vtx_detection_lab.parsers.log_normalizer import (
+    NormalizeSource,
+    normalize_log_file,
+    save_telemetry_jsonl,
+)
 from vtx_detection_lab.parsers.rule_loader import (
     load_rules_from_dir,
     parse_wazuh_rules_xml,
@@ -31,6 +36,19 @@ app = typer.Typer(
     help="vtx-detection-lab — Detection-as-Code validation, MITRE ATT&CK coverage and telemetry replay CLI."
 )
 console = Console()
+
+
+def _load_inventory_safe(assets: Optional[Path]) -> Optional[AssetInventory]:
+    if assets is None:
+        return None
+    try:
+        return load_asset_inventory(assets)
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        console.print(
+            f"[yellow]Aviso de inventário:[/yellow] falha ao carregar '{assets}' ({exc}); "
+            f"aplicando fallback '{UNKNOWN_ASSET_ID}'."
+        )
+        return None
 
 
 @app.command("validate")
@@ -68,6 +86,68 @@ def validate_catalog(
         f"[bold green]Catálogo válido:[/bold green] {len(yaml_rules)} regras YAML e "
         f"{len(wazuh_rules)} regras Wazuh alinhadas em {len(yaml_mitre)} técnicas MITRE ATT&CK."
     )
+
+
+@app.command("normalize")
+def normalize_logs(
+    input_file: Path = typer.Option(
+        ...,
+        "--input",
+        "-i",
+        help="Arquivo de log bruto Nginx (Combined/JSON) ou FastAPI/Uvicorn (texto/JSON).",
+    ),
+    output: Path = typer.Option(
+        Path("artifacts/normalized_events.jsonl"),
+        "--output",
+        "-o",
+        help="Arquivo JSONL de saída compatível com o comando replay.",
+    ),
+    source: NormalizeSource = typer.Option(
+        NormalizeSource.AUTO,
+        "--source",
+        "-s",
+        help="Formato de origem (auto, nginx, fastapi).",
+    ),
+    host: str = typer.Option(
+        "UNKNOWN-HOST",
+        "--host",
+        help="Hostname de origem para resolução de asset_id no inventário.",
+    ),
+    assets: Optional[Path] = typer.Option(
+        None,
+        "--assets",
+        "-a",
+        help="Catálogo YAML de inventário para mapear host -> asset_id.",
+    ),
+    asset_id: Optional[str] = typer.Option(
+        None,
+        "--asset-id",
+        help="Sobrescreve o asset_id explicitamente (opcional).",
+    ),
+    strict: bool = typer.Option(
+        False,
+        "--strict",
+        help="Retorna código de saída 1 se houver linhas não reconhecidas.",
+    ),
+) -> None:
+    """Normaliza logs Nginx/FastAPI para TelemetryEvent JSONL com asset_id."""
+    inventory = _load_inventory_safe(assets)
+    result = normalize_log_file(
+        input_path=input_file,
+        source=source,
+        host=host,
+        asset_inventory=inventory,
+        explicit_asset_id=asset_id,
+    )
+    saved = save_telemetry_jsonl(result.events, output)
+    console.print(
+        f"[green]Normalização concluída:[/green] {result.parsed_lines}/{result.total_lines} "
+        f"linha(s) convertida(s) ({result.skipped_lines} ignorada(s)) -> {saved}"
+    )
+
+    if strict and result.skipped_lines > 0:
+        console.print("[bold red]Modo --strict: existem linhas ignoradas no log.[/bold red]")
+        raise typer.Exit(code=1)
 
 
 @app.command("replay")
@@ -116,16 +196,7 @@ def replay_telemetry(
     wazuh_rules = parse_wazuh_rules_xml(wazuh_xml) if wazuh_xml.exists() else []
     events = load_telemetry_events(telemetry)
 
-    inventory: Optional[AssetInventory] = None
-    if assets is not None:
-        try:
-            inventory = load_asset_inventory(assets)
-        except (OSError, ValueError, yaml.YAMLError) as exc:
-            console.print(
-                f"[yellow]Aviso de inventário:[/yellow] falha ao carregar '{assets}' ({exc}); "
-                f"aplicando fallback '{UNKNOWN_ASSET_ID}'."
-            )
-
+    inventory = _load_inventory_safe(assets)
     summary = evaluate_telemetry(events, rules, asset_inventory=inventory)
     report_md = render_detection_report(rules, summary, wazuh_rules=wazuh_rules)
     saved_path = save_markdown_report(report_md, output)
