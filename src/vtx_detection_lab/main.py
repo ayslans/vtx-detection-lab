@@ -14,6 +14,7 @@ from vtx_detection_lab.assets import (
     load_asset_inventory,
 )
 from vtx_detection_lab.correlator import (
+    EvidenceChainError,
     correlate_ti_and_triage,
     save_correlation_markdown,
     save_correlation_report,
@@ -246,6 +247,11 @@ def correlate_assets(
         "--evidence-log",
         help="Caminho(s) opcional(is) do ledger JSONL SHA-256 (vtx-ti-enricher) para propagar entry_hash por asset_id.",
     ),
+    verify_evidence_chain: bool = typer.Option(
+        False,
+        "--verify-evidence-chain",
+        help="Valida continuidade de seq, prev_hash e entry_hash SHA-256 de cada --evidence-log antes de consolidar.",
+    ),
     output: Path = typer.Option(
         Path("artifacts/correlated_assets.json"),
         "--output",
@@ -271,13 +277,32 @@ def correlate_assets(
     ),
 ) -> None:
     """Consolida alertas enriquecidos (TI), evidências SHA-256 e triagem de vulnerabilidades por asset_id."""
+    if verify_evidence_chain and not evidence_log:
+        console.print(
+            "[bold red]Erro:[/bold red] --verify-evidence-chain requer ao menos um arquivo --evidence-log."
+        )
+        raise typer.Exit(code=2)
+
     inventory = _load_inventory_safe(assets)
-    report = correlate_ti_and_triage(
-        ti_paths=ti_input,
-        triage_paths=triage_input,
-        asset_inventory=inventory,
-        evidence_paths=evidence_log,
-    )
+    try:
+        report = correlate_ti_and_triage(
+            ti_paths=ti_input,
+            triage_paths=triage_input,
+            asset_inventory=inventory,
+            evidence_paths=evidence_log,
+            verify_evidence_chain=verify_evidence_chain,
+        )
+    except EvidenceChainError as exc:
+        console.print(f"[bold red]{exc}[/bold red]")
+        for err in exc.errors:
+            console.print(f"  - {err}")
+        raise typer.Exit(code=1) from exc
+
+    if verify_evidence_chain and evidence_log:
+        console.print(
+            f"[green]Cadeia SHA-256 validada:[/green] {len(evidence_log)} ledger(s) íntegro(s)."
+        )
+
     saved = save_correlation_report(report, output)
 
     if md_output is not None:

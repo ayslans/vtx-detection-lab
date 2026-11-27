@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import re
 from pathlib import Path
@@ -16,6 +18,7 @@ from vtx_detection_lab.assets import (
 
 RiskTier = Literal["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]
 
+GENESIS_PREV_HASH = "0" * 64
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 _VERDICT_RANK: dict[str, int] = {
@@ -39,6 +42,22 @@ _RISK_RANK: dict[RiskTier, int] = {
     "HIGH": 3,
     "CRITICAL": 4,
 }
+
+
+class EvidenceChainError(ValueError):
+    """Erro levantado quando um ledger JSONL falha na validação da cadeia SHA-256."""
+
+    def __init__(self, message: str, errors: Optional[list[str]] = None) -> None:
+        super().__init__(message)
+        self.errors: list[str] = errors or []
+
+
+class EvidenceChainVerificationResult(BaseModel):
+    path: str
+    valid: bool
+    total_entries: int = 0
+    head_hash: Optional[str] = None
+    errors: list[str] = Field(default_factory=list)
 
 
 class ThreatIntelAssetSummary(BaseModel):
@@ -86,6 +105,94 @@ class CorrelationReport(BaseModel):
     corroborated_assets: int = 0
     critical_assets: int = 0
     assets: list[ConsolidatedAssetContext] = Field(default_factory=list)
+
+
+def _canonical_json(data: dict[str, Any]) -> str:
+    return json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def compute_evidence_entry_hash(record_without_hash: dict[str, Any]) -> str:
+    return hashlib.sha256(_canonical_json(record_without_hash).encode("utf-8")).hexdigest()
+
+
+def verify_evidence_ledger_chain(ledger_path: str | Path) -> EvidenceChainVerificationResult:
+    """Valida continuidade de seq, prev_hash e entry_hash SHA-256 de um ledger JSONL."""
+    path = Path(ledger_path)
+    if not path.exists():
+        return EvidenceChainVerificationResult(
+            path=str(path),
+            valid=False,
+            total_entries=0,
+            head_hash=None,
+            errors=[f"Evidence ledger não encontrado: {path}"],
+        )
+
+    errors: list[str] = []
+    expected_seq = 1
+    expected_prev_hash = GENESIS_PREV_HASH
+    head_hash: Optional[str] = None
+    total_entries = 0
+
+    raw_lines = path.read_text(encoding="utf-8").splitlines()
+    for line_no, raw_line in enumerate(raw_lines, start=1):
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError as exc:
+            errors.append(f"Line {line_no}: JSON inválido ({exc})")
+            continue
+
+        if not isinstance(parsed, dict):
+            errors.append(f"Line {line_no}: registro de evidência deve ser um objeto JSON")
+            continue
+
+        total_entries += 1
+
+        seq = parsed.get("seq")
+        if not isinstance(seq, int) or isinstance(seq, bool):
+            errors.append(f"Line {line_no}: campo 'seq' ausente ou inválido ({seq!r})")
+        elif seq != expected_seq:
+            errors.append(
+                f"Line {line_no}: sequence mismatch (expected {expected_seq}, got {seq})"
+            )
+
+        prev_hash = parsed.get("prev_hash")
+        if not isinstance(prev_hash, str) or not _SHA256_RE.match(prev_hash):
+            errors.append(f"Line {line_no}: campo 'prev_hash' ausente ou SHA-256 inválido")
+        elif not hmac.compare_digest(prev_hash, expected_prev_hash):
+            errors.append(
+                f"Line {line_no}: prev_hash mismatch (expected {expected_prev_hash}, got {prev_hash})"
+            )
+
+        entry_hash = parsed.get("entry_hash")
+        if not isinstance(entry_hash, str) or not _SHA256_RE.match(entry_hash):
+            errors.append(f"Line {line_no}: campo 'entry_hash' ausente ou SHA-256 inválido")
+        else:
+            body = {k: v for k, v in parsed.items() if k != "entry_hash"}
+            computed_hash = compute_evidence_entry_hash(body)
+            if not hmac.compare_digest(computed_hash, entry_hash):
+                errors.append(
+                    f"Line {line_no}: entry_hash mismatch (expected {computed_hash}, got {entry_hash})"
+                )
+            expected_prev_hash = entry_hash
+            head_hash = entry_hash
+
+        expected_seq = (
+            seq + 1
+            if isinstance(seq, int) and not isinstance(seq, bool)
+            else expected_seq + 1
+        )
+
+    return EvidenceChainVerificationResult(
+        path=str(path),
+        valid=len(errors) == 0,
+        total_entries=total_entries,
+        head_hash=head_hash,
+        errors=errors,
+    )
 
 
 def _normalize_asset_id(
@@ -230,7 +337,20 @@ def correlate_ti_and_triage(
     triage_paths: list[str | Path],
     asset_inventory: Optional[AssetInventory] = None,
     evidence_paths: Optional[list[str | Path]] = None,
+    verify_evidence_chain: bool = False,
 ) -> CorrelationReport:
+    if verify_evidence_chain and evidence_paths:
+        all_errors: list[str] = []
+        for epath in evidence_paths:
+            check = verify_evidence_ledger_chain(epath)
+            if not check.valid:
+                all_errors.extend(f"{check.path}: {err}" for err in check.errors)
+        if all_errors:
+            raise EvidenceChainError(
+                "Falha na verificação da cadeia SHA-256 do ledger de evidências.",
+                errors=all_errors,
+            )
+
     records_by_asset: dict[str, ConsolidatedAssetContext] = {}
     sets_by_asset: dict[str, dict[str, set[str]]] = {}
 

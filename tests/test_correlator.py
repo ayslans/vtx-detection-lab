@@ -5,9 +5,12 @@ from typer.testing import CliRunner
 
 from vtx_detection_lab.assets import UNKNOWN_ASSET_ID, load_asset_inventory
 from vtx_detection_lab.correlator import (
+    GENESIS_PREV_HASH,
     CorrelationReport,
+    compute_evidence_entry_hash,
     correlate_ti_and_triage,
     render_correlation_markdown,
+    verify_evidence_ledger_chain,
 )
 from vtx_detection_lab.main import app
 
@@ -15,44 +18,39 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES_ASSETS = REPO_ROOT / "examples" / "assets.yaml"
 runner = CliRunner()
 
-SAMPLE_HASH_A = "a" * 64
 SAMPLE_HASH_B = "b" * 64
 
 
-def test_correlate_merges_ti_triage_and_evidence_entry_hash_into_soc_markdown(tmp_path: Path) -> None:
-    ti_payload = {
-        "schema_version": "1.0",
-        "source": "vtx-ti-enricher",
-        "results": [
-            {
-                "asset_id": "pay-lnx-gw-01",
-                "host": "PAY-LNX-GW-01",
-                "rule_id": "VTX-1005",
-                "mitre_technique": "T1190",
-                "indicator": "203.0.113.42",
-                "verdict": "malicious",
-            }
-        ],
-    }
-    evidence_record = {
-        "schema_version": "1.0",
-        "seq": 1,
-        "recorded_at": "2026-11-27T05:20:00Z",
-        "source": "vtx-ti-enricher",
-        "input_source": "samples/detection_lab_alerts.json",
-        "asset_id": "pay-lnx-gw-01",
-        "indicator": "203.0.113.42",
-        "defanged": "203[.]0[.]113[.]42",
-        "ioc_type": "ipv4",
-        "verdict": "malicious",
-        "composite_score": 90.0,
-        "confidence": "high",
-        "providers": ["abuseipdb", "virustotal"],
-        "payload_sha256": "c" * 64,
-        "prev_hash": "0" * 64,
-        "entry_hash": SAMPLE_HASH_A.upper(),
-    }
-    triage_payload = {
+def _build_chained_ledger(entries: list[tuple[str, str, str]]) -> list[dict]:
+    records: list[dict] = []
+    prev_hash = GENESIS_PREV_HASH
+    for seq, (asset_id, indicator, verdict) in enumerate(entries, start=1):
+        body = {
+            "schema_version": "1.0",
+            "seq": seq,
+            "recorded_at": "2026-11-27T05:20:00Z",
+            "source": "vtx-ti-enricher",
+            "input_source": "samples/detection_lab_alerts.json",
+            "asset_id": asset_id,
+            "indicator": indicator,
+            "defanged": indicator.replace(".", "[.]"),
+            "ioc_type": "ipv4",
+            "verdict": verdict,
+            "composite_score": 90.0 if verdict == "malicious" else 45.0,
+            "confidence": "high",
+            "providers": ["abuseipdb", "virustotal"],
+            "payload_sha256": "c" * 64,
+            "prev_hash": prev_hash,
+        }
+        entry_hash = compute_evidence_entry_hash(body)
+        record = {**body, "entry_hash": entry_hash}
+        records.append(record)
+        prev_hash = entry_hash
+    return records
+
+
+def _sample_triage_payload() -> dict:
+    return {
         "schema_version": "1.0",
         "source": "vtx-vuln-triage-ai",
         "asset": {
@@ -96,6 +94,31 @@ def test_correlate_merges_ti_triage_and_evidence_entry_hash_into_soc_markdown(tm
         ],
     }
 
+
+def test_correlate_merges_ti_triage_and_valid_evidence_chain_into_soc_markdown(tmp_path: Path) -> None:
+    ti_payload = {
+        "schema_version": "1.0",
+        "source": "vtx-ti-enricher",
+        "results": [
+            {
+                "asset_id": "pay-lnx-gw-01",
+                "host": "PAY-LNX-GW-01",
+                "rule_id": "VTX-1005",
+                "mitre_technique": "T1190",
+                "indicator": "203.0.113.42",
+                "verdict": "malicious",
+            }
+        ],
+    }
+    chained = _build_chained_ledger(
+        [
+            ("pay-lnx-gw-01", "203.0.113.42", "malicious"),
+            ("cde-app-win-01", "198.51.100.7", "suspicious"),
+        ]
+    )
+    hash_1 = chained[0]["entry_hash"]
+    hash_2 = chained[1]["entry_hash"]
+
     ti_file = tmp_path / "ti_report.json"
     evidence_file = tmp_path / "evidence_ledger.jsonl"
     triage_file = tmp_path / "triage_report.json"
@@ -103,8 +126,16 @@ def test_correlate_merges_ti_triage_and_evidence_entry_hash_into_soc_markdown(tm
     md_file = tmp_path / "correlated_soc.md"
 
     ti_file.write_text(json.dumps(ti_payload), encoding="utf-8")
-    evidence_file.write_text(json.dumps(evidence_record) + "\n", encoding="utf-8")
-    triage_file.write_text(json.dumps(triage_payload), encoding="utf-8")
+    evidence_file.write_text(
+        "\n".join(json.dumps(r) for r in chained) + "\n",
+        encoding="utf-8",
+    )
+    triage_file.write_text(json.dumps(_sample_triage_payload()), encoding="utf-8")
+
+    check = verify_evidence_ledger_chain(evidence_file)
+    assert check.valid is True
+    assert check.total_entries == 2
+    assert check.head_hash == hash_2
 
     result = runner.invoke(
         app,
@@ -116,6 +147,7 @@ def test_correlate_merges_ti_triage_and_evidence_entry_hash_into_soc_markdown(tm
             str(triage_file),
             "--evidence-log",
             str(evidence_file),
+            "--verify-evidence-chain",
             "--assets",
             str(EXAMPLES_ASSETS),
             "--output",
@@ -125,11 +157,12 @@ def test_correlate_merges_ti_triage_and_evidence_entry_hash_into_soc_markdown(tm
         ],
     )
     assert result.exit_code == 0, result.output
+    assert "Cadeia SHA-256 validada" in result.output
     assert out_file.exists()
     assert md_file.exists()
 
     report = CorrelationReport.model_validate_json(out_file.read_text(encoding="utf-8"))
-    assert report.total_assets == 1
+    assert report.total_assets == 2
     assert report.corroborated_assets == 1
     assert report.critical_assets == 1
 
@@ -139,7 +172,7 @@ def test_correlate_merges_ti_triage_and_evidence_entry_hash_into_soc_markdown(tm
     assert ctx.threat_intel.malicious_iocs == ["203.0.113.42"]
     assert ctx.threat_intel.matched_rules == ["VTX-1005"]
     assert ctx.threat_intel.mitre_techniques == ["T1190"]
-    assert ctx.threat_intel.evidence_entry_hashes == [SAMPLE_HASH_A]
+    assert ctx.threat_intel.evidence_entry_hashes == [hash_1]
     assert ctx.vulnerability_triage.finding_count == 1
     assert ctx.vulnerability_triage.p0_count == 1
     assert ctx.vulnerability_triage.cves == ["CVE-2026-124851"]
@@ -150,9 +183,102 @@ def test_correlate_merges_ti_triage_and_evidence_entry_hash_into_soc_markdown(tm
     assert "## Ativos com Exposição Corroborada (Ação Prioritária SOC)" in md_text
     assert "### `pay-lnx-gw-01` — Risco `CRITICAL`" in md_text
     assert "203[.]0[.]113[.]42" in md_text
-    assert f"- **Evidência SHA-256 (`entry_hash`):** `{SAMPLE_HASH_A}`" in md_text
-    assert f"`{SAMPLE_HASH_A[:12]}`" in md_text
+    assert f"- **Evidência SHA-256 (`entry_hash`):** `{hash_1}`" in md_text
+    assert f"`{hash_1[:12]}`" in md_text
     assert "CVE-2026-124851" in md_text
+
+
+def test_correlate_verify_evidence_chain_rejects_tampered_field_and_broken_sequence(tmp_path: Path) -> None:
+    chained = _build_chained_ledger(
+        [
+            ("pay-lnx-gw-01", "203.0.113.42", "malicious"),
+            ("cde-app-win-01", "198.51.100.7", "suspicious"),
+            ("pay-lnx-gw-01", "192.0.2.15", "benign"),
+        ]
+    )
+
+    ti_file = tmp_path / "ti.json"
+    triage_file = tmp_path / "triage.json"
+    ti_file.write_text(json.dumps({"results": []}), encoding="utf-8")
+    triage_file.write_text(json.dumps(_sample_triage_payload()), encoding="utf-8")
+
+    # 1) Campo adulterado sem recalcular entry_hash
+    tampered_field = [dict(chained[0]), chained[1], chained[2]]
+    tampered_field[0]["verdict"] = "benign"
+    tampered_path = tmp_path / "tampered_field.jsonl"
+    tampered_path.write_text(
+        "\n".join(json.dumps(r) for r in tampered_field) + "\n",
+        encoding="utf-8",
+    )
+    out_tampered = tmp_path / "should_not_exist_1.json"
+
+    res_field = runner.invoke(
+        app,
+        [
+            "correlate",
+            "--ti-input",
+            str(ti_file),
+            "--triage-input",
+            str(triage_file),
+            "--evidence-log",
+            str(tampered_path),
+            "--verify-evidence-chain",
+            "--output",
+            str(out_tampered),
+        ],
+    )
+    assert res_field.exit_code == 1
+    assert "entry_hash mismatch" in res_field.output
+    assert not out_tampered.exists()
+
+    # 2) Linha intermediária removida (quebra seq e prev_hash)
+    broken_seq_path = tmp_path / "broken_seq.jsonl"
+    broken_seq_path.write_text(
+        "\n".join(json.dumps(r) for r in [chained[0], chained[2]]) + "\n",
+        encoding="utf-8",
+    )
+    out_seq = tmp_path / "should_not_exist_2.json"
+
+    res_seq = runner.invoke(
+        app,
+        [
+            "correlate",
+            "--ti-input",
+            str(ti_file),
+            "--triage-input",
+            str(triage_file),
+            "--evidence-log",
+            str(broken_seq_path),
+            "--verify-evidence-chain",
+            "--output",
+            str(out_seq),
+        ],
+    )
+    assert res_seq.exit_code == 1
+    assert "sequence mismatch" in res_seq.output
+    assert "prev_hash mismatch" in res_seq.output
+    assert not out_seq.exists()
+
+
+def test_correlate_verify_evidence_chain_requires_evidence_log(tmp_path: Path) -> None:
+    ti_file = tmp_path / "ti.json"
+    triage_file = tmp_path / "triage.json"
+    ti_file.write_text(json.dumps({"results": []}), encoding="utf-8")
+    triage_file.write_text(json.dumps(_sample_triage_payload()), encoding="utf-8")
+
+    res = runner.invoke(
+        app,
+        [
+            "correlate",
+            "--ti-input",
+            str(ti_file),
+            "--triage-input",
+            str(triage_file),
+            "--verify-evidence-chain",
+        ],
+    )
+    assert res.exit_code == 2
+    assert "--evidence-log" in res.output
 
 
 def test_correlate_extracts_valid_entry_hashes_from_ti_input_and_ignores_invalid(tmp_path: Path) -> None:
