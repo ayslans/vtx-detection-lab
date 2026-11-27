@@ -332,6 +332,51 @@ def _compute_risk(
     return CombinedRiskAssessment()
 
 
+# BEGIN VTX_ALG_VERIFY_LEDGER_HEAD_SIG
+def verify_ledger_head_signature(
+    ledger_path: str | Path,
+    sig_path: str | Path | None = None,
+    pub_key_path: str | Path | None = None,
+    verify_script: str | Path | None = None,
+) -> None:
+    """Valida a assinatura Ed25519 do head_hash do ledger via verify_ledger_head.sh."""
+    import os
+    import subprocess
+
+    lpath = Path(ledger_path)
+    spath = Path(sig_path) if sig_path else Path(f"{lpath}.head.sig.json")
+    if not spath.exists() and lpath.name == "evidence_ledger.jsonl":
+        alt = lpath.with_name("evidence_ledger.head.sig.json")
+        if alt.exists():
+            spath = alt
+
+    ppath = Path(pub_key_path) if pub_key_path else Path(
+        os.environ.get("VTX_LEDGER_PUBLIC_KEY_PATH", "config/ledger_signing_pub.pem")
+    )
+    script = Path(verify_script) if verify_script else Path("scripts/verify_ledger_head.sh")
+    require_sig = os.environ.get("VTX_REQUIRE_LEDGER_SIGNATURE", "0") == "1"
+
+    if not spath.exists():
+        if require_sig:
+            raise FileNotFoundError(f"Assinatura do ledger ausente: {spath}")
+        return
+
+    if not ppath.exists():
+        raise FileNotFoundError(f"Chave pública Ed25519 ausente: {ppath}")
+
+    if not script.exists():
+        raise FileNotFoundError(f"Script de verificação ausente: {script}")
+
+    proc = subprocess.run(
+        [str(script), str(lpath), str(spath), str(ppath)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip()
+        raise RuntimeError(f"Falha na assinatura Ed25519 ({spath}): {detail}")
+# END VTX_ALG_VERIFY_LEDGER_HEAD_SIG
 def correlate_ti_and_triage(
     ti_paths: list[str | Path],
     triage_paths: list[str | Path],
@@ -343,6 +388,7 @@ def correlate_ti_and_triage(
         all_errors: list[str] = []
         for epath in evidence_paths:
             check = verify_evidence_ledger_chain(epath)
+            verify_ledger_head_signature(epath)
             if not check.valid:
                 all_errors.extend(f"{check.path}: {err}" for err in check.errors)
         if all_errors:
